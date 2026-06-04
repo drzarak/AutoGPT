@@ -1229,15 +1229,16 @@ class AIListGeneratorBlock(AIBlockBase):
         """
         logger.debug(f"Converting string to list. Input string: {string}")
         try:
-            # Use ast.literal_eval to safely evaluate the string
-            python_list = ast.literal_eval(string)
+            # Use json.loads to safely evaluate the string and avoid ast.literal_eval vulnerabilities
+            import json
+            python_list = json.loads(string)
             if isinstance(python_list, list):
                 logger.debug(f"Successfully converted string to list: {python_list}")
                 return python_list
             else:
                 logger.error(f"The provided string '{string}' is not a valid list")
                 raise ValueError(f"The provided string '{string}' is not a valid list.")
-        except (SyntaxError, ValueError) as e:
+        except (json.JSONDecodeError, ValueError) as e:
             logger.error(f"Failed to convert string to list: {e}")
             raise ValueError("Invalid list format. Could not convert to list.")
 
@@ -1252,21 +1253,21 @@ class AIListGeneratorBlock(AIBlockBase):
             raise ValueError("No LLM API key provided.")
 
         # Prepare the system prompt
-        sys_prompt = """You are a Python list generator. Your task is to generate a Python list based on the user's prompt. 
-            |Respond ONLY with a valid python list. 
-            |The list can contain strings, numbers, or nested lists as appropriate. 
+        sys_prompt = """You are a JSON array generator. Your task is to generate a JSON array based on the user's prompt.
+            |Respond ONLY with a valid JSON array.
+            |The array can contain strings, numbers, or nested arrays as appropriate.
             |Do not include any explanations or additional text.
 
             |Valid Example string formats:
 
             |Example 1:
             |```
-            |['1', '2', '3', '4']
+            |[1, 2, 3, 4]
             |```
 
             |Example 2:
             |```
-            |[['1', '2'], ['3', '4'], ['5', '6']]
+            |[1, 2, [3, 4]]
             |```
 
             |Example 3:
@@ -1354,12 +1355,12 @@ class AIListGeneratorBlock(AIBlockBase):
                     logger.debug("Preparing retry prompt")
                     prompt = f"""
                     The previous attempt failed due to `{e}`
-                    Generate a valid Python list based on the original prompt.
-                    Remember to respond ONLY with a valid Python list as per the format specified earlier.
+                    Generate a valid JSON array based on the original prompt.
+                    Remember to respond ONLY with a valid JSON array as per the format specified earlier.
                     Original prompt: 
                     ```{prompt}```
                     
-                    Respond only with the list in the format specified with no commentary or apologies.
+                    Respond only with the array in the format specified with no commentary or apologies.
                     """
                     logger.debug(f"Retry prompt: {prompt}")
 
