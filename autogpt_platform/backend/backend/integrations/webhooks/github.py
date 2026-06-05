@@ -2,7 +2,8 @@ import hashlib
 import hmac
 import logging
 
-import requests
+import requests as std_requests
+from backend.util.request import requests
 from fastapi import HTTPException, Request
 from strenum import StrEnum
 
@@ -166,7 +167,7 @@ class GithubWebhooksManager(BaseWebhooksManager):
 # --8<-- [end:GithubWebhooksManager]
 
 
-def extract_github_error_msg(response: requests.Response) -> str:
+def extract_github_error_msg(response: std_requests.Response) -> str:
     error_msgs = []
     resp = response.json()
     if resp.get("message"):
