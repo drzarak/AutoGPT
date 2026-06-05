@@ -1,7 +1,8 @@
 import uuid
 from typing import List
 
-import requests as baserequests
+import requests as std_requests
+from backend.util.request import requests as baserequests
 
 from backend.data.block import BlockOutput, BlockSchema
 from backend.data.model import APIKeyCredentials, SchemaField
@@ -181,7 +182,7 @@ class Slant3DEstimateOrderBlock(Slant3DBlockBase):
             yield "total_price", result["totalPrice"]
             yield "shipping_cost", result["shippingCost"]
             yield "printing_cost", result["printingCost"]
-        except baserequests.HTTPError as e:
+        except std_requests.HTTPError as e:
             yield "error", str(f"Error estimating order: {e} {e.response.text}")
             raise
 

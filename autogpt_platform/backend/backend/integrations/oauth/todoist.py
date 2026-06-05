@@ -1,7 +1,7 @@
 import urllib.parse
 from typing import ClassVar, Optional
 
-import requests
+from backend.util.request import requests
 
 from backend.data.model import OAuth2Credentials, ProviderName
 from backend.integrations.oauth.base import BaseOAuthHandler

@@ -2,7 +2,8 @@ import time
 import urllib.parse
 from typing import ClassVar, Optional
 
-import requests
+import requests as std_requests
+from backend.util.request import requests
 
 from backend.data.model import OAuth2Credentials, ProviderName
 from backend.integrations.oauth.base import BaseOAuthHandler
@@ -126,7 +127,7 @@ class TwitterOAuthHandler(BaseOAuthHandler):
 
         try:
             response.raise_for_status()
-        except requests.exceptions.HTTPError as e:
+        except std_requests.exceptions.HTTPError as e:
             print("HTTP Error:", e)
             print("Response Content:", response.text)
             raise
@@ -163,7 +164,7 @@ class TwitterOAuthHandler(BaseOAuthHandler):
 
         try:
             response.raise_for_status()
-        except requests.exceptions.HTTPError as e:
+        except std_requests.exceptions.HTTPError as e:
             print("HTTP Error:", e)
             print("Response Content:", response.text)
             raise

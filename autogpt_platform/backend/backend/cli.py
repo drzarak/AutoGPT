@@ -117,7 +117,7 @@ def reddit(server_address: str):
     """
     Create an event graph
     """
-    import requests
+    from backend.util.request import requests
 
     from backend.usecases.reddit_marketing import create_test_graph
 
@@ -138,7 +138,7 @@ def populate_db(server_address: str):
     """
     Create an event graph
     """
-    import requests
+    from backend.util.request import requests
 
     from backend.usecases.sample import create_test_graph
 
@@ -174,7 +174,7 @@ def graph(server_address: str):
     """
     Create an event graph
     """
-    import requests
+    from backend.util.request import requests
 
     from backend.usecases.sample import create_test_graph
 
@@ -202,7 +202,7 @@ def execute(graph_id: str, content: dict):
     """
     Create an event graph
     """
-    import requests
+    from backend.util.request import requests
 
     headers = {"Content-Type": "application/json"}
 
