@@ -1,6 +1,6 @@
 import logging
 
-import requests
+from backend.util.request import requests
 from fastapi import Request
 
 from backend.data import integrations
