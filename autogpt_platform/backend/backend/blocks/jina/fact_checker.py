@@ -1,6 +1,6 @@
 from urllib.parse import quote
 
-import requests
+from backend.util.request import requests
 
 from backend.blocks.jina._auth import (
     JinaCredentials,
