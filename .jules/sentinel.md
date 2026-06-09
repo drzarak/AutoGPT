@@ -1,0 +1,4 @@
+## 2026-06-09 - Fix SSRF bypass via IPv4-mapped IPv6 addresses
+**Vulnerability:** The SSRF protection in `backend.util.request.requests` blocked local and private IP networks. However, an attacker could bypass these checks by supplying an IPv4-mapped IPv6 address (e.g., `::ffff:127.0.0.1`). Python's `ipaddress` module parses this as an IPv6 address, which does not match the blocked IPv4 ranges (like `127.0.0.0/8`), allowing the request to proceed to internal services.
+**Learning:** When using Python's `ipaddress` module for IP filtering or SSRF protection, IPv4 addresses mapped to IPv6 space must be converted back to their underlying IPv4 addresses before checking against blocked subnets, otherwise they might bypass IPv4-specific deny lists.
+**Prevention:** Always check and extract the underlying IPv4 address from IPv6 objects using the `.ipv4_mapped` property before performing network range validation.

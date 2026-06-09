@@ -38,6 +38,12 @@ def _is_ip_blocked(ip: str) -> bool:
     Checks if the IP address is in a blocked network.
     """
     ip_addr = ipaddress.ip_address(ip)
+
+    # Check and extract the underlying IPv4 address from IPv6 objects
+    # to prevent bypasses via mapped addresses (e.g., '::ffff:127.0.0.1')
+    if hasattr(ip_addr, "ipv4_mapped") and ip_addr.ipv4_mapped:
+        ip_addr = ip_addr.ipv4_mapped
+
     return any(ip_addr in network for network in BLOCKED_IP_NETWORKS)
 
 
