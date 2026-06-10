@@ -39,6 +39,16 @@ def test_validate_url():
     with pytest.raises(ValueError):
         validate_url("http://[::1]", [])  # IPv6 loopback in URL form
 
+    # IPv4-mapped IPv6 Addresses
+    from unittest.mock import patch
+    with patch("socket.getaddrinfo") as mock_getaddrinfo:
+        # Mock resolving an allowed domain to a mapped IPv4 loopback
+        mock_getaddrinfo.return_value = [
+            (10, 1, 6, "", ("::ffff:127.0.0.1", 80, 0, 0))
+        ]
+        with pytest.raises(ValueError, match="Access to blocked or private IP address ::ffff:127.0.0.1"):
+            validate_url("http://test.com", [])
+
     # Suspicious Characters in Hostname
     with pytest.raises(ValueError):
         validate_url("http://example_underscore.com", [])
