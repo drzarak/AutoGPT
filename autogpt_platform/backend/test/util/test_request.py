@@ -39,6 +39,12 @@ def test_validate_url():
     with pytest.raises(ValueError):
         validate_url("http://[::1]", [])  # IPv6 loopback in URL form
 
+    # IPv4-mapped IPv6 Addresses
+    with pytest.raises(ValueError):
+        validate_url("http://[::ffff:127.0.0.1]", [])
+    with pytest.raises(ValueError):
+        validate_url("http://[::ffff:192.168.1.1]", [])
+
     # Suspicious Characters in Hostname
     with pytest.raises(ValueError):
         validate_url("http://example_underscore.com", [])
