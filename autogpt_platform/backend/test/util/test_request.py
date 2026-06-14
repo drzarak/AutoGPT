@@ -1,5 +1,7 @@
 import pytest
 
+import socket
+
 from backend.util.request import validate_url
 
 
@@ -77,3 +79,26 @@ def test_validate_url():
 
     # Non-ASCII Characters in Query/Fragment
     assert validate_url("example.com?param=äöü", []) == "http://example.com?param=äöü"
+
+
+def test_validate_url_ipv4_mapped_ipv6(monkeypatch):
+    """
+    Test that DNS names resolving to IPv4-mapped IPv6 addresses are blocked.
+    Using a monkeypatch on socket.getaddrinfo to simulate such DNS resolution.
+    """
+    original_getaddrinfo = socket.getaddrinfo
+
+    def mock_getaddrinfo(host, port, *args, **kwargs):
+        if host == "ssrf-mapped-loopback.example.com":
+            return [(socket.AF_INET6, 0, 0, "", ("::ffff:127.0.0.1", port, 0, 0))]
+        if host == "ssrf-mapped-private.example.com":
+            return [(socket.AF_INET6, 0, 0, "", ("::ffff:192.168.1.1", port, 0, 0))]
+        return original_getaddrinfo(host, port, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "getaddrinfo", mock_getaddrinfo)
+
+    with pytest.raises(ValueError, match="Access to blocked or private IP"):
+        validate_url("http://ssrf-mapped-loopback.example.com", [])
+
+    with pytest.raises(ValueError, match="Access to blocked or private IP"):
+        validate_url("http://ssrf-mapped-private.example.com", [])
