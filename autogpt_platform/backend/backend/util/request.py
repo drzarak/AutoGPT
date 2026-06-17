@@ -38,6 +38,9 @@ def _is_ip_blocked(ip: str) -> bool:
     Checks if the IP address is in a blocked network.
     """
     ip_addr = ipaddress.ip_address(ip)
+    mapped_ipv4 = getattr(ip_addr, "ipv4_mapped", None)
+    if mapped_ipv4 is not None:
+        ip_addr = mapped_ipv4
     return any(ip_addr in network for network in BLOCKED_IP_NETWORKS)
 
 
