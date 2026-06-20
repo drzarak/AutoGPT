@@ -1,0 +1,4 @@
+## 2024-05-18 - SSRF Bypass via IPv4-Mapped IPv6 Addresses
+**Vulnerability:** The custom HTTP request wrapper used to prevent Server-Side Request Forgery (SSRF) (`_is_ip_blocked`) could be bypassed using IPv4-mapped IPv6 addresses (e.g., `::ffff:127.0.0.1` mapped to `127.0.0.1`). The `ipaddress` module's object checks failed to identify mapped addresses as belonging to the blocked IPv4 networks.
+**Learning:** Checking an IP object against networks using `ip_addr in network` is insufficient when an IPv6 address maps directly to a blocked IPv4 address. The `ipaddress` module separates IPv4 and IPv6 networks entirely unless specifically requested.
+**Prevention:** Always extract and evaluate the underlying IPv4 address from any IPv6 address input by checking the `ipv4_mapped` property. Use `getattr(ip_addr, "ipv4_mapped", None)` because the property does not exist on IPv4 objects.
