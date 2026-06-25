@@ -1,6 +1,22 @@
 import pytest
 
-from backend.util.request import validate_url
+from backend.util.request import _is_ip_blocked, validate_url
+
+
+def test_is_ip_blocked():
+    # Normal IPv4
+    assert _is_ip_blocked("127.0.0.1") is True
+    assert _is_ip_blocked("10.0.0.1") is True
+    assert _is_ip_blocked("8.8.8.8") is False
+
+    # IPv6 Mapped IPv4 addresses (SSRF Bypass Check)
+    assert _is_ip_blocked("::ffff:127.0.0.1") is True
+    assert _is_ip_blocked("::ffff:7f00:1") is True
+    assert _is_ip_blocked("::ffff:10.0.0.1") is True
+    assert _is_ip_blocked("::ffff:8.8.8.8") is False
+
+    # Normal IPv6
+    assert _is_ip_blocked("::1") is True
 
 
 def test_validate_url():
