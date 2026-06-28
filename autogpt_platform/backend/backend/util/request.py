@@ -35,7 +35,13 @@ HOSTNAME_REGEX = re.compile(r"^[A-Za-z0-9.-]+$")  # Basic DNS-safe hostname patt
 
 def _is_ip_blocked(ip: str) -> bool:
     """
-    Checks if the IP address is in a blocked network.
+    Determine whether an IP address falls within a blocked network range.
+    
+    Parameters:
+    	ip (str): IP address to check.
+    
+    Returns:
+    	bool: `true` if the address is in one of the blocked networks, `false` otherwise.
     """
     ip_addr = ipaddress.ip_address(ip)
     ipv4_mapped = getattr(ip_addr, "ipv4_mapped", None)
