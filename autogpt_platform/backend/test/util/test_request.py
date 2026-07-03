@@ -1,5 +1,8 @@
 import pytest
 
+import socket
+from unittest.mock import patch
+
 from backend.util.request import validate_url
 
 
@@ -58,6 +61,23 @@ def test_validate_url():
         == "http://internal-api.company.com"
     )
     assert validate_url("10.0.0.5", ["10.0.0.5"]) == "http://10.0.0.5"
+
+    # Test for IPv4-mapped IPv6 address SSRF bypass
+    with patch("socket.getaddrinfo") as mock_getaddrinfo:
+        # getaddrinfo returns a list of tuples: (family, type, proto, canonname, sockaddr)
+        # We mock DNS resolution to return the mapped IPv4 address for a remote host
+        mock_getaddrinfo.return_value = [
+            (
+                socket.AF_INET6,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("::ffff:127.0.0.1", 80, 0, 0),
+            )
+        ]
+
+        with pytest.raises(ValueError, match="Access to blocked or private IP address"):
+            validate_url("http://attacker-controlled-domain.com", [])
 
     # Special Characters in Path or Query
     assert (

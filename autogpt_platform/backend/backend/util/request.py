@@ -38,7 +38,16 @@ def _is_ip_blocked(ip: str) -> bool:
     Checks if the IP address is in a blocked network.
     """
     ip_addr = ipaddress.ip_address(ip)
-    return any(ip_addr in network for network in BLOCKED_IP_NETWORKS)
+    if any(ip_addr in network for network in BLOCKED_IP_NETWORKS):
+        return True
+
+    # Check for IPv4-mapped IPv6 addresses (e.g., ::ffff:127.0.0.1)
+    # which could bypass IPv4 blocklists.
+    mapped_ipv4 = getattr(ip_addr, "ipv4_mapped", None)
+    if mapped_ipv4 and any(mapped_ipv4 in network for network in BLOCKED_IP_NETWORKS):
+        return True
+
+    return False
 
 
 def validate_url(url: str, trusted_origins: list[str]) -> str:
