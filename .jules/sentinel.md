@@ -1,0 +1,4 @@
+## 2024-07-06 - IPv4-mapped IPv6 Address SSRF Bypass
+**Vulnerability:** The custom HTTP request wrapper used to prevent SSRF vulnerabilities was checking for blocked IPs by utilizing Python's `ipaddress` library directly without handling IPv4-mapped IPv6 addresses. This allowed attackers to bypass the block list using IP addresses like `::ffff:127.0.0.1`.
+**Learning:** Python's `ipaddress` module correctly parses IPv4-mapped IPv6 addresses as IPv6 address objects. As such, these address objects won't be identified as matching block list elements that specify an IPv4 network segment.
+**Prevention:** Always extract the underlying IPv4 address via the `.ipv4_mapped` property of `ipaddress` address objects when checking them against block lists, defaulting gracefully for standard IPv4 addresses via `getattr(ip_addr, "ipv4_mapped", None)`.
