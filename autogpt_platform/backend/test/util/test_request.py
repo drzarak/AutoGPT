@@ -39,6 +39,23 @@ def test_validate_url():
     with pytest.raises(ValueError):
         validate_url("http://[::1]", [])  # IPv6 loopback in URL form
 
+    # IPv4-mapped IPv6 Addresses
+    import socket
+
+    original_getaddrinfo = socket.getaddrinfo
+
+    def mock_getaddrinfo(host, port, *args, **kwargs):
+        if host == "evil.com":
+            return [(socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("::ffff:127.0.0.1", 0, 0, 0))]
+        return original_getaddrinfo(host, port, *args, **kwargs)
+
+    socket.getaddrinfo = mock_getaddrinfo
+    try:
+        with pytest.raises(ValueError, match="Access to blocked or private IP address"):
+            validate_url("http://evil.com", [])
+    finally:
+        socket.getaddrinfo = original_getaddrinfo
+
     # Suspicious Characters in Hostname
     with pytest.raises(ValueError):
         validate_url("http://example_underscore.com", [])
