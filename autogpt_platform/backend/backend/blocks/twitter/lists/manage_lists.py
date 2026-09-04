@@ -3,15 +3,22 @@ from typing import cast
 import tweepy
 from tweepy.client import Response
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -20,7 +27,7 @@ class TwitterDeleteListBlock(Block):
     Deletes a Twitter List owned by the authenticated user
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["list.write", "offline.access"]
         )
@@ -28,12 +35,10 @@ class TwitterDeleteListBlock(Block):
         list_id: str = SchemaField(
             description="The ID of the List to be deleted",
             placeholder="Enter list ID",
-            required=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the deletion was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -42,6 +47,7 @@ class TwitterDeleteListBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterDeleteListBlock.Input,
             output_schema=TwitterDeleteListBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={"list_id": "1234567890", "credentials": TEST_CREDENTIALS_INPUT},
             test_credentials=TEST_CREDENTIALS,
             test_output=[("success", True)],
@@ -63,7 +69,7 @@ class TwitterDeleteListBlock(Block):
         except Exception:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -83,7 +89,7 @@ class TwitterUpdateListBlock(Block):
     Updates a Twitter List owned by the authenticated user
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["list.write", "offline.access"]
         )
@@ -108,9 +114,8 @@ class TwitterUpdateListBlock(Block):
             advanced=False,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the update was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -119,6 +124,7 @@ class TwitterUpdateListBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterUpdateListBlock.Input,
             output_schema=TwitterUpdateListBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "list_id": "1234567890",
                 "name": "Updated List Name",
@@ -156,7 +162,7 @@ class TwitterUpdateListBlock(Block):
         except Exception:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -178,7 +184,7 @@ class TwitterCreateListBlock(Block):
     Creates a Twitter List owned by the authenticated user
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["list.write", "offline.access"]
         )
@@ -203,10 +209,9 @@ class TwitterCreateListBlock(Block):
             default=False,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         url: str = SchemaField(description="URL of the created list")
         list_id: str = SchemaField(description="ID of the created list")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -215,6 +220,7 @@ class TwitterCreateListBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterCreateListBlock.Input,
             output_schema=TwitterCreateListBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "name": "New List Name",
                 "description": "New List Description",
@@ -260,7 +266,7 @@ class TwitterCreateListBlock(Block):
         except Exception:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

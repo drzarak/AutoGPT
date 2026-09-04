@@ -1,32 +1,38 @@
-import React from "react";
+import { fonts } from "@/components/styles/fonts";
 import type { Metadata } from "next";
-import { Inter, Poppins } from "next/font/google";
-import { GoogleAnalytics } from "@next/third-parties/google";
-import { GeistSans } from "geist/font/sans";
-import { GeistMono } from "geist/font/mono";
-import { headers } from "next/headers";
+import React from "react";
 
-import { cn } from "@/lib/utils";
 import "./globals.css";
 
-import { Navbar } from "@/components/agptui/Navbar";
-import { Toaster } from "@/components/ui/toaster";
-import { IconType } from "@/components/ui/icons";
 import { Providers } from "@/app/providers";
-import TallyPopupSimple from "@/components/TallyPopup";
-import OttoChatWidget from "@/components/OttoChatWidget";
+import { CookieConsentBanner } from "@/components/molecules/CookieConsentBanner/CookieConsentBanner";
+import { ErrorBoundary } from "@/components/molecules/ErrorBoundary/ErrorBoundary";
+import TallyPopupSimple from "@/components/molecules/TallyPoup/TallyPopup";
+import { Toaster } from "@/components/molecules/Toast/toaster";
+import { SetupAnalytics } from "@/services/analytics";
+import { VercelAnalyticsWrapper } from "@/services/analytics/VercelAnalyticsWrapper";
+import { environment } from "@/services/environment";
+import AgentationDevtool from "@/components/AgentationDevtool";
+import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
+import { headers } from "next/headers";
 
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
+const isDev = environment.isDev();
+const isLocal = environment.isLocal();
 
-const poppins = Poppins({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-poppins",
-});
+const faviconPath = isDev
+  ? "/favicon-dev.ico"
+  : isLocal
+    ? "/favicon-local.ico"
+    : "/favicon.ico";
 
 export const metadata: Metadata = {
-  title: "NextGen AutoGPT",
+  title: "AutoGPT Platform",
   description: "Your one stop shop to creating AI Agents",
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: faviconPath,
+    apple: "/apple-touch-icon.png",
+  },
 };
 
 export default async function RootLayout({
@@ -34,98 +40,50 @@ export default async function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const pathname = headers().get("x-current-path");
-  const isOnboarding = pathname?.startsWith("/onboarding");
+  const headersList = await headers();
+  const host = headersList.get("host") || "";
 
   return (
     <html
       lang="en"
-      className={`${poppins.variable} ${GeistSans.variable} ${GeistMono.variable} ${inter.variable}`}
+      className={`${fonts.poppins.variable} ${fonts.sans.variable} ${fonts.mono.variable}`}
+      suppressHydrationWarning
     >
-      <body
-        className={cn(
-          "bg-neutral-50 antialiased transition-colors",
-          inter.className,
-        )}
-      >
-        <Providers
-          attribute="class"
-          defaultTheme="light"
-          // Feel free to remove this line if you want to use the system theme by default
-          // enableSystem
-          disableTransitionOnChange
-        >
-          <div className="flex min-h-screen flex-col items-stretch justify-items-stretch">
-            {!isOnboarding && (
-              <Navbar
-                links={[
-                  {
-                    name: "Marketplace",
-                    href: "/marketplace",
-                  },
-                  {
-                    name: "Library",
-                    href: "/library",
-                  },
-                  {
-                    name: "Build",
-                    href: "/build",
-                  },
-                ]}
-                menuItemGroups={[
-                  {
-                    items: [
-                      {
-                        icon: IconType.Edit,
-                        text: "Edit profile",
-                        href: "/profile",
-                      },
-                    ],
-                  },
-                  {
-                    items: [
-                      {
-                        icon: IconType.LayoutDashboard,
-                        text: "Creator Dashboard",
-                        href: "/profile/dashboard",
-                      },
-                      {
-                        icon: IconType.UploadCloud,
-                        text: "Publish an agent",
-                      },
-                    ],
-                  },
-                  {
-                    items: [
-                      {
-                        icon: IconType.Settings,
-                        text: "Settings",
-                        href: "/profile/settings",
-                      },
-                    ],
-                  },
-                  {
-                    items: [
-                      {
-                        icon: IconType.LogOut,
-                        text: "Log out",
-                      },
-                    ],
-                  },
-                ]}
-              />
-            )}
-            <main className="w-full flex-grow">{children}</main>
-            <TallyPopupSimple />
-            <OttoChatWidget />
-          </div>
-          <Toaster />
-        </Providers>
-      </body>
+      <body className="min-h-screen">
+        <ErrorBoundary context="application">
+          <Providers
+            attribute="class"
+            defaultTheme="light"
+            // Feel free to remove this line if you want to use the system theme by default
+            // enableSystem
+            disableTransitionOnChange
+          >
+            <SetupAnalytics
+              host={host}
+              ga={{
+                gaId:
+                  process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID || "G-FH2XK2W4GN",
+              }}
+            />
+            <div className="flex min-h-screen flex-col items-stretch justify-items-stretch">
+              {children}
+              <TallyPopupSimple />
+              <VercelAnalyticsWrapper />
 
-      <GoogleAnalytics
-        gaId={process.env.GA_MEASUREMENT_ID || "G-FH2XK2W4GN"} // This is the measurement Id for the Google Analytics dev project
-      />
+              {/* React Query DevTools is only available in development */}
+              {process.env.NEXT_PUBLIC_REACT_QUERY_DEVTOOL && (
+                <ReactQueryDevtools
+                  initialIsOpen={false}
+                  buttonPosition={"bottom-left"}
+                />
+              )}
+            </div>
+            <Toaster />
+            <CookieConsentBanner />
+            {(isLocal || isDev) && <AgentationDevtool />}
+          </Providers>
+        </ErrorBoundary>
+      </body>
     </html>
   );
 }

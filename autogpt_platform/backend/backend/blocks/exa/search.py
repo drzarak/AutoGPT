@@ -1,83 +1,126 @@
 from datetime import datetime
-from typing import List
+from enum import Enum
+from typing import Optional
 
-from backend.blocks.exa._auth import (
-    ExaCredentials,
-    ExaCredentialsField,
-    ExaCredentialsInput,
+from exa_py import AsyncExa
+
+from backend.sdk import (
+    APIKeyCredentials,
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+    CredentialsMetaInput,
+    SchemaField,
 )
-from backend.blocks.exa.helpers import ContentSettings
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
-from backend.data.model import SchemaField
-from backend.util.request import requests
+
+from ._config import exa
+from .helpers import (
+    ContentSettings,
+    CostDollars,
+    ExaSearchResults,
+    merge_exa_cost,
+    process_contents_settings,
+)
+
+
+class ExaSearchTypes(Enum):
+    KEYWORD = "keyword"
+    NEURAL = "neural"
+    FAST = "fast"
+    AUTO = "auto"
+
+
+class ExaSearchCategories(Enum):
+    COMPANY = "company"
+    RESEARCH_PAPER = "research paper"
+    NEWS = "news"
+    PDF = "pdf"
+    GITHUB = "github"
+    TWEET = "tweet"
+    PERSONAL_SITE = "personal site"
+    LINKEDIN_PROFILE = "linkedin profile"
+    FINANCIAL_REPORT = "financial report"
 
 
 class ExaSearchBlock(Block):
-    class Input(BlockSchema):
-        credentials: ExaCredentialsInput = ExaCredentialsField()
+    class Input(BlockSchemaInput):
+        credentials: CredentialsMetaInput = exa.credentials_field(
+            description="The Exa integration requires an API Key."
+        )
         query: str = SchemaField(description="The search query")
-        use_auto_prompt: bool = SchemaField(
-            description="Whether to use autoprompt",
-            default=True,
+        type: ExaSearchTypes = SchemaField(
+            description="Type of search", default=ExaSearchTypes.AUTO, advanced=True
+        )
+        category: ExaSearchCategories | None = SchemaField(
+            description="Category to search within: company, research paper, news, pdf, github, tweet, personal site, linkedin profile, financial report",
+            default=None,
             advanced=True,
         )
-        type: str = SchemaField(
-            description="Type of search",
-            default="",
-            advanced=True,
-        )
-        category: str = SchemaField(
-            description="Category to search within",
-            default="",
+        user_location: str | None = SchemaField(
+            description="The two-letter ISO country code of the user (e.g., 'US')",
+            default=None,
             advanced=True,
         )
         number_of_results: int = SchemaField(
-            description="Number of results to return",
-            default=10,
-            advanced=True,
+            description="Number of results to return", default=10, advanced=True
         )
-        include_domains: List[str] = SchemaField(
-            description="Domains to include in search",
-            default=[],
+        include_domains: list[str] = SchemaField(
+            description="Domains to include in search", default_factory=list
         )
-        exclude_domains: List[str] = SchemaField(
+        exclude_domains: list[str] = SchemaField(
             description="Domains to exclude from search",
-            default=[],
+            default_factory=list,
             advanced=True,
         )
-        start_crawl_date: datetime = SchemaField(
-            description="Start date for crawled content",
+        start_crawl_date: datetime | None = SchemaField(
+            description="Start date for crawled content", advanced=True, default=None
         )
-        end_crawl_date: datetime = SchemaField(
-            description="End date for crawled content",
+        end_crawl_date: datetime | None = SchemaField(
+            description="End date for crawled content", advanced=True, default=None
         )
-        start_published_date: datetime = SchemaField(
-            description="Start date for published content",
+        start_published_date: datetime | None = SchemaField(
+            description="Start date for published content", advanced=True, default=None
         )
-        end_published_date: datetime = SchemaField(
-            description="End date for published content",
+        end_published_date: datetime | None = SchemaField(
+            description="End date for published content", advanced=True, default=None
         )
-        include_text: List[str] = SchemaField(
-            description="Text patterns to include",
-            default=[],
-            advanced=True,
+        include_text: list[str] = SchemaField(
+            description="Text patterns to include", default_factory=list, advanced=True
         )
-        exclude_text: List[str] = SchemaField(
-            description="Text patterns to exclude",
-            default=[],
-            advanced=True,
+        exclude_text: list[str] = SchemaField(
+            description="Text patterns to exclude", default_factory=list, advanced=True
         )
         contents: ContentSettings = SchemaField(
             description="Content retrieval settings",
             default=ContentSettings(),
             advanced=True,
         )
-
-    class Output(BlockSchema):
-        results: list = SchemaField(
-            description="List of search results",
-            default=[],
+        moderation: bool = SchemaField(
+            description="Enable content moderation to filter unsafe content from search results",
+            default=False,
+            advanced=True,
         )
+
+    class Output(BlockSchemaOutput):
+        results: list[ExaSearchResults] = SchemaField(
+            description="List of search results"
+        )
+        result: ExaSearchResults = SchemaField(description="Single search result")
+        context: str = SchemaField(
+            description="A formatted string of the search results ready for LLMs."
+        )
+        search_type: str = SchemaField(
+            description="For auto searches, indicates which search type was selected."
+        )
+        resolved_search_type: str = SchemaField(
+            description="The search type that was actually used for this request (neural or keyword)"
+        )
+        cost_dollars: Optional[CostDollars] = SchemaField(
+            description="Cost breakdown for the request"
+        )
+        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -88,56 +131,80 @@ class ExaSearchBlock(Block):
             output_schema=ExaSearchBlock.Output,
         )
 
-    def run(
-        self, input_data: Input, *, credentials: ExaCredentials, **kwargs
+    async def run(
+        self, input_data: Input, *, credentials: APIKeyCredentials, **kwargs
     ) -> BlockOutput:
-        url = "https://api.exa.ai/search"
-        headers = {
-            "Content-Type": "application/json",
-            "x-api-key": credentials.api_key.get_secret_value(),
-        }
-
-        payload = {
+        sdk_kwargs = {
             "query": input_data.query,
-            "useAutoprompt": input_data.use_auto_prompt,
-            "numResults": input_data.number_of_results,
-            "contents": input_data.contents.dict(),
+            "num_results": input_data.number_of_results,
         }
 
-        date_field_mapping = {
-            "start_crawl_date": "startCrawlDate",
-            "end_crawl_date": "endCrawlDate",
-            "start_published_date": "startPublishedDate",
-            "end_published_date": "endPublishedDate",
-        }
+        if input_data.type:
+            sdk_kwargs["type"] = input_data.type.value
 
-        # Add dates if they exist
-        for input_field, api_field in date_field_mapping.items():
-            value = getattr(input_data, input_field, None)
-            if value:
-                payload[api_field] = value.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        if input_data.category:
+            sdk_kwargs["category"] = input_data.category.value
 
-        optional_field_mapping = {
-            "type": "type",
-            "category": "category",
-            "include_domains": "includeDomains",
-            "exclude_domains": "excludeDomains",
-            "include_text": "includeText",
-            "exclude_text": "excludeText",
-        }
+        if input_data.user_location:
+            sdk_kwargs["user_location"] = input_data.user_location
 
-        # Add other fields
-        for input_field, api_field in optional_field_mapping.items():
-            value = getattr(input_data, input_field)
-            if value:  # Only add non-empty values
-                payload[api_field] = value
+        # Handle domains
+        if input_data.include_domains:
+            sdk_kwargs["include_domains"] = input_data.include_domains
+        if input_data.exclude_domains:
+            sdk_kwargs["exclude_domains"] = input_data.exclude_domains
 
-        try:
-            response = requests.post(url, headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            # Extract just the results array from the response
-            yield "results", data.get("results", [])
-        except Exception as e:
-            yield "error", str(e)
-            yield "results", []
+        # Handle dates
+        if input_data.start_crawl_date:
+            sdk_kwargs["start_crawl_date"] = input_data.start_crawl_date.isoformat()
+        if input_data.end_crawl_date:
+            sdk_kwargs["end_crawl_date"] = input_data.end_crawl_date.isoformat()
+        if input_data.start_published_date:
+            sdk_kwargs["start_published_date"] = (
+                input_data.start_published_date.isoformat()
+            )
+        if input_data.end_published_date:
+            sdk_kwargs["end_published_date"] = input_data.end_published_date.isoformat()
+
+        # Handle text filters
+        if input_data.include_text:
+            sdk_kwargs["include_text"] = input_data.include_text
+        if input_data.exclude_text:
+            sdk_kwargs["exclude_text"] = input_data.exclude_text
+
+        if input_data.moderation:
+            sdk_kwargs["moderation"] = input_data.moderation
+
+        # heck if we need to use search_and_contents
+        content_settings = process_contents_settings(input_data.contents)
+
+        aexa = AsyncExa(api_key=credentials.api_key.get_secret_value())
+
+        if content_settings:
+            sdk_kwargs["text"] = content_settings.get("text", False)
+            if "highlights" in content_settings:
+                sdk_kwargs["highlights"] = content_settings["highlights"]
+            if "summary" in content_settings:
+                sdk_kwargs["summary"] = content_settings["summary"]
+            response = await aexa.search_and_contents(**sdk_kwargs)
+        else:
+            response = await aexa.search(**sdk_kwargs)
+
+        converted_results = [
+            ExaSearchResults.from_sdk(sdk_result)
+            for sdk_result in response.results or []
+        ]
+
+        yield "results", converted_results
+        for result in converted_results:
+            yield "result", result
+
+        if response.context:
+            yield "context", response.context
+
+        if response.resolved_search_type:
+            yield "resolved_search_type", response.resolved_search_type
+
+        if response.cost_dollars:
+            yield "cost_dollars", response.cost_dollars
+        merge_exa_cost(self, response)

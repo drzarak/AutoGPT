@@ -1,8 +1,15 @@
 from enum import Enum
 from typing import Any
 
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.data.model import SchemaField
+from backend.util.type import convert
 
 
 class ComparisonOperator(Enum):
@@ -15,7 +22,7 @@ class ComparisonOperator(Enum):
 
 
 class ConditionBlock(Block):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         value1: Any = SchemaField(
             description="Enter the first value for comparison",
             placeholder="For example: 10 or 'hello' or True",
@@ -39,7 +46,7 @@ class ConditionBlock(Block):
             default=None,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         result: bool = SchemaField(
             description="The result of the condition evaluation (True or False)"
         )
@@ -70,7 +77,7 @@ class ConditionBlock(Block):
             ],
         )
 
-    def run(self, input_data: Input, **kwargs) -> BlockOutput:
+    async def run(self, input_data: Input, **kwargs) -> BlockOutput:
         operator = input_data.operator
 
         value1 = input_data.value1
@@ -99,7 +106,10 @@ class ConditionBlock(Block):
             ComparisonOperator.LESS_THAN_OR_EQUAL: lambda a, b: a <= b,
         }
 
-        result = comparison_funcs[operator](value1, value2)
+        try:
+            result = comparison_funcs[operator](value1, value2)
+        except Exception as e:
+            raise ValueError(f"Comparison failed: {e}") from e
 
         yield "result", result
 
@@ -110,7 +120,7 @@ class ConditionBlock(Block):
 
 
 class IfInputMatchesBlock(Block):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         input: Any = SchemaField(
             description="The input to match against",
             placeholder="For example: 10 or 'hello' or True",
@@ -130,7 +140,7 @@ class IfInputMatchesBlock(Block):
             default=None,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         result: bool = SchemaField(
             description="The result of the condition evaluation (True or False)"
         )
@@ -163,7 +173,7 @@ class IfInputMatchesBlock(Block):
                 },
                 {
                     "input": 10,
-                    "value": None,
+                    "value": "None",
                     "yes_value": "Yes",
                     "no_value": "No",
                 },
@@ -180,8 +190,24 @@ class IfInputMatchesBlock(Block):
             ],
         )
 
-    def run(self, input_data: Input, **kwargs) -> BlockOutput:
-        if input_data.input == input_data.value or input_data.input is input_data.value:
+    async def run(self, input_data: Input, **kwargs) -> BlockOutput:
+
+        # If input_data.value is not matching input_data.input, convert value to type of input
+        if (
+            input_data.input != input_data.value
+            and input_data.input is not input_data.value
+        ):
+            try:
+                # Only attempt conversion if input is not None and value is not None
+                if input_data.input is not None and input_data.value is not None:
+                    input_type = type(input_data.input)
+                    # Avoid converting if input_type is Any or object
+                    if input_type not in (Any, object):
+                        input_data.value = convert(input_data.value, input_type)
+            except Exception:
+                pass  # If conversion fails, just leave value as is
+
+        if input_data.input == input_data.value:
             yield "result", True
             yield "yes_output", input_data.yes_value
         else:

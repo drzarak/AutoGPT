@@ -1,33 +1,39 @@
 from todoist_api_python.api import TodoistAPI
 from typing_extensions import Optional
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.todoist._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TODOIST_OAUTH_IS_CONFIGURED,
     TodoistCredentials,
     TodoistCredentialsField,
     TodoistCredentialsInput,
 )
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
 class TodoistListSectionsBlock(Block):
     """Gets all sections for a Todoist project"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         project_id: Optional[str] = SchemaField(
             description="Optional project ID to filter sections"
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         names_list: list[str] = SchemaField(description="List of section names")
         ids_list: list[str] = SchemaField(description="List of section IDs")
         complete_data: list[dict] = SchemaField(
             description="Complete section data including all fields"
         )
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -36,6 +42,7 @@ class TodoistListSectionsBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistListSectionsBlock.Input,
             output_schema=TodoistListSectionsBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "project_id": "2203306141",
@@ -94,7 +101,7 @@ class TodoistListSectionsBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -121,13 +128,13 @@ class TodoistListSectionsBlock(Block):
 # class TodoistCreateSectionBlock(Block):
 #     """Creates a new section in a Todoist project"""
 
-#     class Input(BlockSchema):
+#     class Input(BlockSchemaInput):
 #         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
 #         name: str = SchemaField(description="Section name")
 #         project_id: str = SchemaField(description="Project ID this section should belong to")
 #         order: Optional[int] = SchemaField(description="Optional order among other sections", default=None)
 
-#     class Output(BlockSchema):
+#     class Output(BlockSchemaOutput):
 #         success: bool = SchemaField(description="Whether section was successfully created")
 #         error: str = SchemaField(description="Error message if the request failed")
 
@@ -164,7 +171,7 @@ class TodoistListSectionsBlock(Block):
 #         except Exception as e:
 #             raise e
 
-#     def run(
+#     async def run(
 #         self,
 #         input_data: Input,
 #         *,
@@ -189,16 +196,15 @@ class TodoistListSectionsBlock(Block):
 class TodoistGetSectionBlock(Block):
     """Gets a single section from Todoist by ID"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         section_id: str = SchemaField(description="ID of section to fetch")
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         id: str = SchemaField(description="ID of section")
         project_id: str = SchemaField(description="Project ID the section belongs to")
         order: int = SchemaField(description="Order of the section")
         name: str = SchemaField(description="Name of the section")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -207,6 +213,7 @@ class TodoistGetSectionBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistGetSectionBlock.Input,
             output_schema=TodoistGetSectionBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={"credentials": TEST_CREDENTIALS_INPUT, "section_id": "7025"},
             test_credentials=TEST_CREDENTIALS,
             test_output=[
@@ -235,7 +242,7 @@ class TodoistGetSectionBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -258,15 +265,14 @@ class TodoistGetSectionBlock(Block):
 class TodoistDeleteSectionBlock(Block):
     """Deletes a section and all its tasks from Todoist"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         section_id: str = SchemaField(description="ID of section to delete")
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(
             description="Whether section was successfully deleted"
         )
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -275,6 +281,7 @@ class TodoistDeleteSectionBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistDeleteSectionBlock.Input,
             output_schema=TodoistDeleteSectionBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={"credentials": TEST_CREDENTIALS_INPUT, "section_id": "7025"},
             test_credentials=TEST_CREDENTIALS,
             test_output=[("success", True)],
@@ -291,7 +298,7 @@ class TodoistDeleteSectionBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

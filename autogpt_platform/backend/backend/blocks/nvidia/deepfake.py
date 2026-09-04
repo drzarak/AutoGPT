@@ -1,37 +1,40 @@
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.nvidia._auth import (
     NvidiaCredentials,
     NvidiaCredentialsField,
     NvidiaCredentialsInput,
 )
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
-from backend.util.request import requests
+from backend.util.request import Requests
+from backend.util.type import MediaFileType
 
 
 class NvidiaDeepfakeDetectBlock(Block):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: NvidiaCredentialsInput = NvidiaCredentialsField()
-        image_base64: str = SchemaField(
-            description="Image to analyze for deepfakes", image_upload=True
+        image_base64: MediaFileType = SchemaField(
+            description="Image to analyze for deepfakes",
         )
         return_image: bool = SchemaField(
             description="Whether to return the processed image with markings",
             default=False,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         status: str = SchemaField(
             description="Detection status (SUCCESS, ERROR, CONTENT_FILTERED)",
-            default="",
         )
-        image: str = SchemaField(
+        image: MediaFileType = SchemaField(
             description="Processed image with detection markings (if return_image=True)",
-            default="",
-            image_output=True,
         )
         is_deepfake: float = SchemaField(
             description="Probability that the image is a deepfake (0-1)",
-            default=0.0,
         )
 
     def __init__(self):
@@ -43,7 +46,7 @@ class NvidiaDeepfakeDetectBlock(Block):
             output_schema=NvidiaDeepfakeDetectBlock.Output,
         )
 
-    def run(
+    async def run(
         self, input_data: Input, *, credentials: NvidiaCredentials, **kwargs
     ) -> BlockOutput:
         url = "https://ai.api.nvidia.com/v1/cv/hive/deepfake-image-detection"
@@ -62,8 +65,7 @@ class NvidiaDeepfakeDetectBlock(Block):
         }
 
         try:
-            response = requests.post(url, headers=headers, json=payload)
-            response.raise_for_status()
+            response = await Requests().post(url, headers=headers, json=payload)
             data = response.json()
 
             result = data.get("data", [{}])[0]

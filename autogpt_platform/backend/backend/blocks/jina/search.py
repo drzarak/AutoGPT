@@ -1,5 +1,12 @@
-from groq._utils._utils import quote
+from urllib.parse import quote
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.jina._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
@@ -8,20 +15,20 @@ from backend.blocks.jina._auth import (
     JinaCredentialsInput,
 )
 from backend.blocks.search import GetRequest
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
-from backend.data.model import SchemaField
+from backend.data.model import NodeExecutionStats, SchemaField
+from backend.util.exceptions import BlockExecutionError
+from backend.util.request import HTTPClientError, HTTPServerError, validate_url_host
 
 
 class SearchTheWebBlock(Block, GetRequest):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: JinaCredentialsInput = JinaCredentialsField()
         query: str = SchemaField(description="The search query to search the web for")
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         results: str = SchemaField(
             description="The search results including content from top 5 URLs"
         )
-        error: str = SchemaField(description="Error message if the search fails")
 
     def __init__(self):
         super().__init__(
@@ -39,7 +46,7 @@ class SearchTheWebBlock(Block, GetRequest):
             test_mock={"get_request": lambda *args, **kwargs: "search content"},
         )
 
-    def run(
+    async def run(
         self, input_data: Input, *, credentials: JinaCredentials, **kwargs
     ) -> BlockOutput:
         # Encode the search query
@@ -51,14 +58,31 @@ class SearchTheWebBlock(Block, GetRequest):
 
         # Prepend the Jina Search URL to the encoded query
         jina_search_url = f"https://s.jina.ai/{encoded_query}"
-        results = self.get_request(jina_search_url, headers=headers, json=False)
+
+        try:
+            results = await self.get_request(
+                jina_search_url, headers=headers, json=False
+            )
+        except Exception as e:
+            raise BlockExecutionError(
+                message=f"Search failed: {e}",
+                block_name=self.name,
+                block_id=self.id,
+            ) from e
+
+        # Jina Reader Search: $0.01/query on the paid tier. Fixed per-query
+        # cost; routed through COST_USD so the platform cost log records
+        # real USD spend (costMicrodollars) alongside the credit charge.
+        self.merge_stats(
+            NodeExecutionStats(provider_cost=0.01, provider_cost_type="cost_usd")
+        )
 
         # Output the search results
         yield "results", results
 
 
 class ExtractWebsiteContentBlock(Block, GetRequest):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: JinaCredentialsInput = JinaCredentialsField()
         url: str = SchemaField(description="The URL to scrape the content from")
         raw_content: bool = SchemaField(
@@ -68,7 +92,7 @@ class ExtractWebsiteContentBlock(Block, GetRequest):
             advanced=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         content: str = SchemaField(description="The scraped content from the given URL")
         error: str = SchemaField(
             description="Error message if the content cannot be retrieved"
@@ -90,11 +114,16 @@ class ExtractWebsiteContentBlock(Block, GetRequest):
             test_mock={"get_request": lambda *args, **kwargs: "scraped content"},
         )
 
-    def run(
+    async def run(
         self, input_data: Input, *, credentials: JinaCredentials, **kwargs
     ) -> BlockOutput:
         if input_data.raw_content:
-            url = input_data.url
+            try:
+                parsed_url, _, _ = await validate_url_host(input_data.url)
+                url = parsed_url.geturl()
+            except ValueError as e:
+                yield "error", f"Invalid URL: {e}"
+                return
             headers = {}
         else:
             url = f"https://r.jina.ai/{input_data.url}"
@@ -103,5 +132,26 @@ class ExtractWebsiteContentBlock(Block, GetRequest):
                 "Authorization": f"Bearer {credentials.api_key.get_secret_value()}",
             }
 
-        content = self.get_request(url, json=False, headers=headers)
+        try:
+            content = await self.get_request(url, json=False, headers=headers)
+        except HTTPClientError as e:
+            yield (
+                "error",
+                f"Client error ({e.status_code}) fetching {input_data.url}: {e}",
+            )
+            return
+        except HTTPServerError as e:
+            yield (
+                "error",
+                f"Server error ({e.status_code}) fetching {input_data.url}: {e}",
+            )
+            return
+        except Exception as e:
+            yield "error", f"Failed to fetch {input_data.url}: {e}"
+            return
+
+        if not content:
+            yield "error", f"No content returned for {input_data.url}"
+            return
+
         yield "content", content

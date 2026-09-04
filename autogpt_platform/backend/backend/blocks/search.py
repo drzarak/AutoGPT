@@ -3,8 +3,14 @@ from urllib.parse import quote
 
 from pydantic import SecretStr
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.helpers.http import GetRequest
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import (
     APIKeyCredentials,
     CredentialsField,
@@ -12,13 +18,14 @@ from backend.data.model import (
     SchemaField,
 )
 from backend.integrations.providers import ProviderName
+from backend.util.request import DEFAULT_USER_AGENT
 
 
 class GetWikipediaSummaryBlock(Block, GetRequest):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         topic: str = SchemaField(description="The topic to fetch the summary for")
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         summary: str = SchemaField(description="The summary of the given topic")
         error: str = SchemaField(
             description="Error message if the summary cannot be retrieved"
@@ -33,16 +40,32 @@ class GetWikipediaSummaryBlock(Block, GetRequest):
             output_schema=GetWikipediaSummaryBlock.Output,
             test_input={"topic": "Artificial Intelligence"},
             test_output=("summary", "summary content"),
-            test_mock={"get_request": lambda url, json: {"extract": "summary content"}},
+            test_mock={
+                "get_request": lambda url, headers, json: {"extract": "summary content"}
+            },
         )
 
-    def run(self, input_data: Input, **kwargs) -> BlockOutput:
+    async def run(self, input_data: Input, **kwargs) -> BlockOutput:
         topic = input_data.topic
-        url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{topic}"
-        response = self.get_request(url, json=True)
-        if "extract" not in response:
-            raise RuntimeError(f"Unable to parse Wikipedia response: {response}")
-        yield "summary", response["extract"]
+        # URL-encode the topic to handle spaces and special characters
+        encoded_topic = quote(topic, safe="")
+        url = f"https://en.wikipedia.org/api/rest_v1/page/summary/{encoded_topic}"
+
+        # Set headers per Wikimedia robot policy (https://w.wiki/4wJS)
+        # - User-Agent: Required, must identify the bot
+        # - Accept-Encoding: gzip recommended to reduce bandwidth
+        headers = {
+            "User-Agent": DEFAULT_USER_AGENT,
+            "Accept-Encoding": "gzip, deflate",
+        }
+
+        try:
+            response = await self.get_request(url, headers=headers, json=True)
+            if "extract" not in response:
+                raise ValueError(f"Unable to parse Wikipedia response: {response}")
+            yield "summary", response["extract"]
+        except Exception as e:
+            raise ValueError(f"Failed to fetch Wikipedia summary: {e}") from e
 
 
 TEST_CREDENTIALS = APIKeyCredentials(
@@ -61,7 +84,7 @@ TEST_CREDENTIALS_INPUT = {
 
 
 class GetWeatherInformationBlock(Block, GetRequest):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         location: str = SchemaField(
             description="Location to get weather information for"
         )
@@ -76,7 +99,7 @@ class GetWeatherInformationBlock(Block, GetRequest):
             description="Whether to use Celsius or Fahrenheit for temperature",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         temperature: str = SchemaField(
             description="Temperature in the specified location"
         )
@@ -113,14 +136,14 @@ class GetWeatherInformationBlock(Block, GetRequest):
             test_credentials=TEST_CREDENTIALS,
         )
 
-    def run(
+    async def run(
         self, input_data: Input, *, credentials: APIKeyCredentials, **kwargs
     ) -> BlockOutput:
         units = "metric" if input_data.use_celsius else "imperial"
         api_key = credentials.api_key
         location = input_data.location
         url = f"http://api.openweathermap.org/data/2.5/weather?q={quote(location)}&appid={api_key}&units={units}"
-        weather_data = self.get_request(url, json=True)
+        weather_data = await self.get_request(url, json=True)
 
         if "main" in weather_data and "weather" in weather_data:
             yield "temperature", str(weather_data["main"]["temp"])

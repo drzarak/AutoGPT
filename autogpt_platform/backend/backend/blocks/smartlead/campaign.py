@@ -1,3 +1,10 @@
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.smartlead._api import SmartLeadClient
 from backend.blocks.smartlead._auth import (
     TEST_CREDENTIALS,
@@ -16,22 +23,21 @@ from backend.blocks.smartlead.models import (
     SaveSequencesResponse,
     Sequence,
 )
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
-from backend.data.model import SchemaField
+from backend.data.model import CredentialsField, NodeExecutionStats, SchemaField
 
 
 class CreateCampaignBlock(Block):
     """Create a campaign in SmartLead"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         name: str = SchemaField(
             description="The name of the campaign",
         )
-        credentials: SmartLeadCredentialsInput = SchemaField(
+        credentials: SmartLeadCredentialsInput = CredentialsField(
             description="SmartLead credentials",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         id: int = SchemaField(
             description="The ID of the created campaign",
         )
@@ -80,20 +86,20 @@ class CreateCampaignBlock(Block):
         )
 
     @staticmethod
-    def create_campaign(
+    async def create_campaign(
         name: str, credentials: SmartLeadCredentials
     ) -> CreateCampaignResponse:
         client = SmartLeadClient(credentials.api_key.get_secret_value())
-        return client.create_campaign(CreateCampaignRequest(name=name))
+        return await client.create_campaign(CreateCampaignRequest(name=name))
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
         credentials: SmartLeadCredentials,
         **kwargs,
     ) -> BlockOutput:
-        response = self.create_campaign(input_data.name, credentials)
+        response = await self.create_campaign(input_data.name, credentials)
 
         yield "id", response.id
         yield "name", response.name
@@ -105,25 +111,25 @@ class CreateCampaignBlock(Block):
 class AddLeadToCampaignBlock(Block):
     """Add a lead to a campaign in SmartLead"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         campaign_id: int = SchemaField(
             description="The ID of the campaign to add the lead to",
         )
         lead_list: list[LeadInput] = SchemaField(
             description="An array of JSON objects, each representing a lead's details. Can hold max 100 leads.",
             max_length=100,
-            default=[],
+            default_factory=list,
             advanced=False,
         )
         settings: LeadUploadSettings = SchemaField(
             description="Settings for lead upload",
             default=LeadUploadSettings(),
         )
-        credentials: SmartLeadCredentialsInput = SchemaField(
+        credentials: SmartLeadCredentialsInput = CredentialsField(
             description="SmartLead credentials",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         campaign_id: int = SchemaField(
             description="The ID of the campaign the lead was added to (passed through)",
         )
@@ -193,11 +199,11 @@ class AddLeadToCampaignBlock(Block):
         )
 
     @staticmethod
-    def add_leads_to_campaign(
+    async def add_leads_to_campaign(
         campaign_id: int, lead_list: list[LeadInput], credentials: SmartLeadCredentials
     ) -> AddLeadsToCampaignResponse:
         client = SmartLeadClient(credentials.api_key.get_secret_value())
-        return client.add_leads_to_campaign(
+        return await client.add_leads_to_campaign(
             AddLeadsRequest(
                 campaign_id=campaign_id,
                 lead_list=lead_list,
@@ -210,15 +216,21 @@ class AddLeadToCampaignBlock(Block):
             ),
         )
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
         credentials: SmartLeadCredentials,
         **kwargs,
     ) -> BlockOutput:
-        response = self.add_leads_to_campaign(
+        response = await self.add_leads_to_campaign(
             input_data.campaign_id, input_data.lead_list, credentials
+        )
+        self.merge_stats(
+            NodeExecutionStats(
+                provider_cost=float(len(input_data.lead_list)),
+                provider_cost_type="items",
+            )
         )
 
         yield "campaign_id", input_data.campaign_id
@@ -242,20 +254,20 @@ class AddLeadToCampaignBlock(Block):
 class SaveCampaignSequencesBlock(Block):
     """Save sequences within a campaign"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         campaign_id: int = SchemaField(
             description="The ID of the campaign to save sequences for",
         )
         sequences: list[Sequence] = SchemaField(
             description="The sequences to save",
-            default=[],
+            default_factory=list,
             advanced=False,
         )
-        credentials: SmartLeadCredentialsInput = SchemaField(
+        credentials: SmartLeadCredentialsInput = CredentialsField(
             description="SmartLead credentials",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         data: dict | str | None = SchemaField(
             description="Data from the API",
             default=None,
@@ -297,22 +309,22 @@ class SaveCampaignSequencesBlock(Block):
         )
 
     @staticmethod
-    def save_campaign_sequences(
+    async def save_campaign_sequences(
         campaign_id: int, sequences: list[Sequence], credentials: SmartLeadCredentials
     ) -> SaveSequencesResponse:
         client = SmartLeadClient(credentials.api_key.get_secret_value())
-        return client.save_campaign_sequences(
+        return await client.save_campaign_sequences(
             campaign_id=campaign_id, request=SaveSequencesRequest(sequences=sequences)
         )
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
         credentials: SmartLeadCredentials,
         **kwargs,
     ) -> BlockOutput:
-        response = self.save_campaign_sequences(
+        response = await self.save_campaign_sequences(
             input_data.campaign_id, input_data.sequences, credentials
         )
 

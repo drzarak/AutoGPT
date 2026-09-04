@@ -1,113 +1,184 @@
 import { useContext } from "react";
-import { CustomNodeData } from "@/components/CustomNode";
-import {
-  BlockIOCredentialsSubSchema,
-  CredentialsProviderName,
-} from "@/lib/autogpt-server-api";
-import { Node, useNodeId, useNodesData } from "@xyflow/react";
+
 import {
   CredentialsProviderData,
   CredentialsProvidersContext,
-} from "@/components/integrations/credentials-provider";
-import { getValue } from "@/lib/utils";
+} from "@/providers/agent-credentials/credentials-provider";
+import {
+  BlockIOCredentialsSubSchema,
+  CredentialsMetaResponse,
+  CredentialsType,
+} from "@/lib/autogpt-server-api";
+import { getHostFromUrl } from "@/lib/utils/url";
+import {
+  getCredentialProviderFromSchema,
+  getDiscriminatorValue,
+} from "@/components/renderers/InputRenderer/custom/CredentialField/helpers";
 
-export type CredentialsData =
-  | {
-      provider: string;
-      schema: BlockIOCredentialsSubSchema;
-      supportsApiKey: boolean;
-      supportsOAuth2: boolean;
-      supportsUserPassword: boolean;
-      isLoading: true;
+export function classifyCredentials(
+  allSaved: readonly CredentialsMetaResponse[],
+  credsInputSchema: BlockIOCredentialsSubSchema,
+  discriminatorValue: string | undefined,
+): {
+  savedCredentials: CredentialsMetaResponse[];
+  upgradeableCredentials: CredentialsMetaResponse[];
+} {
+  const savedCredentials: CredentialsMetaResponse[] = [];
+  const upgradeableCredentials: CredentialsMetaResponse[] = [];
+  const supportedTypes = credsInputSchema.credentials_types;
+
+  for (const c of allSaved) {
+    if (!supportedTypes.includes(c.type)) continue;
+
+    // MCP OAuth2 credentials filter by server URL — not upgradeable
+    if (c.type === "oauth2" && c.provider === "mcp") {
+      if (discriminatorValue != null && c.host === discriminatorValue) {
+        savedCredentials.push(c);
+      }
+      continue;
     }
-  | (CredentialsProviderData & {
-      schema: BlockIOCredentialsSubSchema;
-      supportsApiKey: boolean;
-      supportsOAuth2: boolean;
-      supportsUserPassword: boolean;
-      isLoading: false;
-    });
+
+    if (c.type === "oauth2") {
+      const requiredScopes = credsInputSchema.credentials_scopes;
+      // Set.prototype.isSupersetOf is ES2025 and this project targets
+      // ES2022 — fall back to an array every() check so the picker's
+      // scope filter runs cleanly on current Node/browser baselines.
+      const credScopes = new Set(c.scopes);
+      const hasAllScopes =
+        !requiredScopes || requiredScopes.every((s) => credScopes.has(s));
+      if (hasAllScopes) {
+        savedCredentials.push(c);
+      } else {
+        upgradeableCredentials.push(c);
+      }
+      continue;
+    }
+
+    if (c.type === "host_scoped") {
+      if (discriminatorValue && getHostFromUrl(discriminatorValue) == c.host) {
+        savedCredentials.push(c);
+      }
+      continue;
+    }
+
+    savedCredentials.push(c);
+  }
+
+  return { savedCredentials, upgradeableCredentials };
+}
+
+export type CredentialsData = CredentialsProviderData & {
+  schema: BlockIOCredentialsSubSchema;
+  supportsApiKey: boolean;
+  supportsOAuth2: boolean;
+  supportsDeviceCode: boolean;
+  supportsUserPassword: boolean;
+  supportsHostScoped: boolean;
+  isLoading: false;
+  discriminatorValue?: string;
+  upgradeableCredentials: CredentialsMetaResponse[];
+  allProviderCredentials: CredentialsMetaResponse[];
+};
+
+export function getSupportedCredentialTypes(
+  schema: BlockIOCredentialsSubSchema,
+  discriminatorValue: string | undefined,
+) {
+  if (schema.discriminator_type_mapping) {
+    return (
+      schema.discriminator_type_mapping[discriminatorValue ?? ""] ??
+      schema.credentials_types
+    );
+  }
+  return schema.credentials_types;
+}
+
+/**
+ * Maps a block's accepted credential types to the connect methods its UI
+ * should offer.
+ *
+ * These are usually the same list, but a device-code grant produces an
+ * ordinary OAuth2 credential — so such a block accepts `oauth2` (otherwise
+ * saved credentials stop matching) while `device_code` is what the user must
+ * actually go through. Letting `device_code` shadow `oauth2` keeps the UI
+ * from offering an authorization-code redirect the provider has no client
+ * secret for, which is what made these blocks unconnectable.
+ */
+export function deriveAuthMethods(supportedTypes: readonly CredentialsType[]) {
+  const authMethods = getConnectableCredentialTypes(supportedTypes);
+  return {
+    supportsApiKey: authMethods.includes("api_key"),
+    supportsDeviceCode: authMethods.includes("device_code"),
+    supportsOAuth2: authMethods.includes("oauth2"),
+    supportsUserPassword: authMethods.includes("user_password"),
+    supportsHostScoped: authMethods.includes("host_scoped"),
+  };
+}
+
+export function getConnectableCredentialTypes(
+  supportedTypes: readonly CredentialsType[],
+) {
+  const usesDeviceAuth = supportedTypes.includes("device_code");
+  return supportedTypes.filter((type) => type !== "oauth2" || !usesDeviceAuth);
+}
 
 export default function useCredentials(
-  inputFieldName: string,
+  credsInputSchema: BlockIOCredentialsSubSchema,
+  nodeInputValues?: Record<string, unknown>,
+  selectedProvider?: string,
 ): CredentialsData | null {
-  const nodeId = useNodeId();
   const allProviders = useContext(CredentialsProvidersContext);
 
-  if (!nodeId) {
-    throw new Error("useCredentials must be within a CustomNode");
-  }
-
-  const data = useNodesData<Node<CustomNodeData>>(nodeId)!.data;
-  const credentialsSchema = data.inputSchema.properties[
-    inputFieldName
-  ] as BlockIOCredentialsSubSchema;
-
-  const discriminatorValue: CredentialsProviderName | null =
-    (credentialsSchema.discriminator &&
-      credentialsSchema.discriminator_mapping![
-        getValue(credentialsSchema.discriminator, data.hardcodedValues)
-      ]) ||
-    null;
-
-  let providerName: CredentialsProviderName;
-  if (credentialsSchema.credentials_provider.length > 1) {
-    if (!credentialsSchema.discriminator) {
-      throw new Error(
-        "Multi-provider credential input requires discriminator!",
-      );
-    }
-    if (!discriminatorValue) {
-      return null;
-    }
-    providerName = discriminatorValue;
-  } else {
-    providerName = credentialsSchema.credentials_provider[0];
-  }
+  const inputs = nodeInputValues ?? {};
+  const discriminatorValue = getDiscriminatorValue(inputs, credsInputSchema);
+  const providerName = getCredentialProviderFromSchema(
+    inputs,
+    credsInputSchema,
+    selectedProvider,
+  );
+  if (!providerName) return null;
   const provider = allProviders ? allProviders[providerName] : null;
 
-  // If block input schema doesn't have credentials, return null
-  if (!credentialsSchema) {
-    return null;
-  }
-
-  const supportsApiKey =
-    credentialsSchema.credentials_types.includes("api_key");
-  const supportsOAuth2 = credentialsSchema.credentials_types.includes("oauth2");
-  const supportsUserPassword =
-    credentialsSchema.credentials_types.includes("user_password");
+  const supportedTypes = getSupportedCredentialTypes(
+    credsInputSchema,
+    discriminatorValue,
+  );
+  const effectiveSchema = {
+    ...credsInputSchema,
+    credentials_types: supportedTypes,
+  };
+  const {
+    supportsApiKey,
+    supportsDeviceCode,
+    supportsOAuth2,
+    supportsUserPassword,
+    supportsHostScoped,
+  } = deriveAuthMethods(supportedTypes);
 
   // No provider means maybe it's still loading
   if (!provider) {
-    // return {
-    //   provider: credentialsSchema.credentials_provider,
-    //   schema: credentialsSchema,
-    //   supportsApiKey,
-    //   supportsOAuth2,
-    //   isLoading: true,
-    // };
     return null;
   }
 
-  // Filter by OAuth credentials that have sufficient scopes for this block
-  const requiredScopes = credentialsSchema.credentials_scopes;
-  const savedOAuthCredentials = requiredScopes
-    ? provider.savedOAuthCredentials.filter((c) =>
-        new Set(c.scopes).isSupersetOf(new Set(requiredScopes)),
-      )
-    : provider.savedOAuthCredentials;
-
-  const savedUserPasswordCredentials = provider.savedUserPasswordCredentials;
+  const { savedCredentials, upgradeableCredentials } = classifyCredentials(
+    provider.savedCredentials,
+    effectiveSchema,
+    discriminatorValue,
+  );
 
   return {
     ...provider,
+    allProviderCredentials: provider.savedCredentials,
     provider: providerName,
-    schema: credentialsSchema,
+    schema: effectiveSchema,
     supportsApiKey,
     supportsOAuth2,
+    supportsDeviceCode,
     supportsUserPassword,
-    savedOAuthCredentials,
-    savedUserPasswordCredentials,
+    supportsHostScoped,
+    savedCredentials,
+    upgradeableCredentials,
+    discriminatorValue,
     isLoading: false,
   };
 }

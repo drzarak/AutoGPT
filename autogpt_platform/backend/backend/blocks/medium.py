@@ -3,7 +3,13 @@ from typing import List, Literal
 
 from pydantic import SecretStr
 
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.data.model import (
     APIKeyCredentials,
     BlockSecret,
@@ -13,7 +19,7 @@ from backend.data.model import (
     SecretField,
 )
 from backend.integrations.providers import ProviderName
-from backend.util.request import requests
+from backend.util.request import Requests
 
 TEST_CREDENTIALS = APIKeyCredentials(
     id="01234567-89ab-cdef-0123-456789abcdef",
@@ -37,10 +43,10 @@ class PublishToMediumStatus(str, Enum):
 
 
 class PublishToMediumBlock(Block):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         author_id: BlockSecret = SecretField(
             key="medium_author_id",
-            description="""The Medium AuthorID of the user. You can get this by calling the /me endpoint of the Medium API.\n\ncurl -H "Authorization: Bearer YOUR_ACCESS_TOKEN" https://api.medium.com/v1/me" the response will contain the authorId field.""",
+            description="""The Medium AuthorID of the user. You can get this by calling the /me endpoint of the Medium API.\n\ncurl -H "Authorization: Bearer YOUR_ACCESS_TOKEN" https://api.medium.com/v1/me\n\nThe response will contain the authorId field.""",
             placeholder="Enter the author's Medium AuthorID",
         )
         title: str = SchemaField(
@@ -84,7 +90,7 @@ class PublishToMediumBlock(Block):
             description="The Medium integration can be used with any API key with sufficient permissions for the blocks it is used on.",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         post_id: str = SchemaField(description="The ID of the created Medium post")
         post_url: str = SchemaField(description="The URL of the created Medium post")
         published_at: int = SchemaField(
@@ -130,7 +136,7 @@ class PublishToMediumBlock(Block):
             test_credentials=TEST_CREDENTIALS,
         )
 
-    def create_post(
+    async def create_post(
         self,
         api_key: SecretStr,
         author_id,
@@ -160,18 +166,17 @@ class PublishToMediumBlock(Block):
             "notifyFollowers": notify_followers,
         }
 
-        response = requests.post(
+        response = await Requests().post(
             f"https://api.medium.com/v1/users/{author_id}/posts",
             headers=headers,
             json=data,
         )
-
         return response.json()
 
-    def run(
+    async def run(
         self, input_data: Input, *, credentials: APIKeyCredentials, **kwargs
     ) -> BlockOutput:
-        response = self.create_post(
+        response = await self.create_post(
             credentials.api_key,
             input_data.author_id.get_secret_value(),
             input_data.title,

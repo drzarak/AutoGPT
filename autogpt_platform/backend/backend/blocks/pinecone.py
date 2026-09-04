@@ -3,11 +3,18 @@ from typing import Any, Literal
 
 from pinecone import Pinecone, ServerlessSpec
 
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.data.model import (
     APIKeyCredentials,
     CredentialsField,
     CredentialsMetaInput,
+    NodeExecutionStats,
     SchemaField,
 )
 from backend.integrations.providers import ProviderName
@@ -27,7 +34,7 @@ def PineconeCredentialsField() -> PineconeCredentialsInput:
 
 
 class PineconeInitBlock(Block):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: PineconeCredentialsInput = PineconeCredentialsField()
         index_name: str = SchemaField(description="Name of the Pinecone index")
         dimension: int = SchemaField(
@@ -43,7 +50,7 @@ class PineconeInitBlock(Block):
             description="Region for serverless", default="us-east-1"
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         index: str = SchemaField(description="Name of the initialized Pinecone index")
         message: str = SchemaField(description="Status message")
 
@@ -56,7 +63,7 @@ class PineconeInitBlock(Block):
             output_schema=PineconeInitBlock.Output,
         )
 
-    def run(
+    async def run(
         self, input_data: Input, *, credentials: APIKeyCredentials, **kwargs
     ) -> BlockOutput:
         pc = Pinecone(api_key=credentials.api_key.get_secret_value())
@@ -83,7 +90,7 @@ class PineconeInitBlock(Block):
 
 
 class PineconeQueryBlock(Block):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: PineconeCredentialsInput = PineconeCredentialsField()
         query_vector: list = SchemaField(description="Query vector")
         namespace: str = SchemaField(
@@ -102,7 +109,7 @@ class PineconeQueryBlock(Block):
         host: str = SchemaField(description="Host for pinecone", default="")
         idx_name: str = SchemaField(description="Index name for pinecone")
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         results: Any = SchemaField(description="Query results from Pinecone")
         combined_results: Any = SchemaField(
             description="Combined results from Pinecone"
@@ -117,7 +124,7 @@ class PineconeQueryBlock(Block):
             output_schema=PineconeQueryBlock.Output,
         )
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -154,10 +161,13 @@ class PineconeQueryBlock(Block):
                 combined_text = "\n\n".join(texts)
 
             # Return both the raw matches and combined text
-            yield "results", {
-                "matches": results["matches"],
-                "combined_text": combined_text,
-            }
+            yield (
+                "results",
+                {
+                    "matches": results["matches"],
+                    "combined_text": combined_text,
+                },
+            )
             yield "combined_results", combined_text
 
         except Exception as e:
@@ -166,7 +176,7 @@ class PineconeQueryBlock(Block):
 
 
 class PineconeInsertBlock(Block):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: PineconeCredentialsInput = PineconeCredentialsField()
         index: str = SchemaField(description="Initialized Pinecone index")
         chunks: list = SchemaField(description="List of text chunks to ingest")
@@ -177,10 +187,11 @@ class PineconeInsertBlock(Block):
             description="Namespace to use in Pinecone", default=""
         )
         metadata: dict = SchemaField(
-            description="Additional metadata to store with each vector", default={}
+            description="Additional metadata to store with each vector",
+            default_factory=dict,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         upsert_response: str = SchemaField(
             description="Response from Pinecone upsert operation"
         )
@@ -194,7 +205,7 @@ class PineconeInsertBlock(Block):
             output_schema=PineconeInsertBlock.Output,
         )
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -220,6 +231,13 @@ class PineconeInsertBlock(Block):
                     }
                 )
             idx.upsert(vectors=vectors, namespace=input_data.namespace)
+
+            self.merge_stats(
+                NodeExecutionStats(
+                    provider_cost=float(len(vectors)),
+                    provider_cost_type="items",
+                )
+            )
 
             yield "upsert_response", "successfully upserted"
 

@@ -1,12 +1,12 @@
 import logging
 
-import requests
 from fastapi import Request
 
 from backend.data import integrations
 from backend.data.model import APIKeyCredentials, Credentials
 from backend.integrations.providers import ProviderName
 from backend.integrations.webhooks._base import BaseWebhooksManager
+from backend.util.request import Requests
 
 logger = logging.getLogger(__name__)
 
@@ -39,13 +39,13 @@ class Slant3DWebhooksManager(BaseWebhooksManager):
         # Slant3D's API doesn't use events list, just register for all order updates
         payload = {"endPoint": ingress_url}
 
-        response = requests.post(
+        response = await Requests(raise_for_status=False).post(
             f"{self.BASE_URL}/customer/webhookSubscribe", headers=headers, json=payload
         )
 
         if not response.ok:
             error = response.json().get("error", "Unknown error")
-            raise RuntimeError(f"Failed to register webhook: {error}")
+            raise ValueError(f"Slant3D returned error: {error}")
 
         webhook_config = {
             "endpoint": ingress_url,
@@ -58,7 +58,10 @@ class Slant3DWebhooksManager(BaseWebhooksManager):
 
     @classmethod
     async def validate_payload(
-        cls, webhook: integrations.Webhook, request: Request
+        cls,
+        webhook: integrations.Webhook,
+        request: Request,
+        credentials: Credentials | None,
     ) -> tuple[dict, str]:
         """Validate incoming webhook payload from Slant3D"""
 

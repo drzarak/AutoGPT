@@ -5,9 +5,17 @@ import tweepy
 from pydantic import BaseModel
 from tweepy.client import Response
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
@@ -34,7 +42,6 @@ from backend.blocks.twitter._types import (
     TweetUserFieldsFilter,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -70,7 +77,7 @@ class TwitterPostTweetBlock(Block):
     Create a tweet on Twitter with the option to include one additional element such as a media, quote, or deep link.
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["tweet.read", "tweet.write", "users.read", "offline.access"]
         )
@@ -117,7 +124,7 @@ class TwitterPostTweetBlock(Block):
             default=TweetReplySettingsFilter(All_Users=True),
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         tweet_id: str = SchemaField(description="ID of the created tweet")
         tweet_url: str = SchemaField(description="URL to the tweet")
         error: str = SchemaField(
@@ -131,6 +138,7 @@ class TwitterPostTweetBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterPostTweetBlock.Input,
             output_schema=TwitterPostTweetBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "tweet_text": "This is a test tweet.",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -209,7 +217,7 @@ class TwitterPostTweetBlock(Block):
         except Exception:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -238,7 +246,7 @@ class TwitterDeleteTweetBlock(Block):
     Deletes a tweet on Twitter using twitter Id
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["tweet.read", "tweet.write", "users.read", "offline.access"]
         )
@@ -248,7 +256,7 @@ class TwitterDeleteTweetBlock(Block):
             placeholder="Enter tweet ID",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(
             description="Whether the tweet was successfully deleted"
         )
@@ -263,6 +271,7 @@ class TwitterDeleteTweetBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterDeleteTweetBlock.Input,
             output_schema=TwitterDeleteTweetBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "tweet_id": "1234567890",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -285,7 +294,7 @@ class TwitterDeleteTweetBlock(Block):
         except Exception:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -332,7 +341,7 @@ class TwitterSearchRecentTweetsBlock(Block):
             advanced=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common Outputs that user commonly uses
         tweet_ids: list[str] = SchemaField(description="All Tweet IDs")
         tweet_texts: list[str] = SchemaField(description="All Tweet texts")
@@ -348,7 +357,6 @@ class TwitterSearchRecentTweetsBlock(Block):
         )
 
         # error
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -357,6 +365,7 @@ class TwitterSearchRecentTweetsBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterSearchRecentTweetsBlock.Input,
             output_schema=TwitterSearchRecentTweetsBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "query": "from:twitterapi #twitterapi",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -504,7 +513,7 @@ class TwitterSearchRecentTweetsBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

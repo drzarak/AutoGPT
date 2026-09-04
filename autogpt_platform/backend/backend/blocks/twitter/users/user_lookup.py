@@ -4,9 +4,11 @@ import tweepy
 from pydantic import BaseModel
 from tweepy.client import Response
 
+from backend.blocks._base import Block, BlockCategory, BlockOutput, BlockSchemaOutput
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
@@ -23,7 +25,6 @@ from backend.blocks.twitter._types import (
     UserExpansionsFilter,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -55,7 +56,7 @@ class TwitterGetUserBlock(Block):
             advanced=False,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common outputs
         id: str = SchemaField(description="User ID")
         username_: str = SchemaField(description="User username")
@@ -66,7 +67,6 @@ class TwitterGetUserBlock(Block):
         included: dict = SchemaField(
             description="Additional data requested via expansions"
         )
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -75,6 +75,7 @@ class TwitterGetUserBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetUserBlock.Input,
             output_schema=TwitterGetUserBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "identifier": {"discriminator": "username", "username": "twitter"},
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -166,7 +167,7 @@ class TwitterGetUserBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -200,7 +201,7 @@ class UserIdList(BaseModel):
     user_ids: list[str] = SchemaField(
         description="List of user IDs to lookup (max 100)",
         placeholder="Enter user IDs",
-        default=[],
+        default_factory=list,
         advanced=False,
     )
 
@@ -210,7 +211,7 @@ class UsernameList(BaseModel):
     usernames: list[str] = SchemaField(
         description="List of Twitter usernames/handles to lookup (max 100)",
         placeholder="Enter usernames",
-        default=[],
+        default_factory=list,
         advanced=False,
     )
 
@@ -231,7 +232,7 @@ class TwitterGetUsersBlock(Block):
             advanced=False,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common outputs
         ids: list[str] = SchemaField(description="User IDs")
         usernames_: list[str] = SchemaField(description="User usernames")
@@ -242,7 +243,6 @@ class TwitterGetUsersBlock(Block):
         included: dict = SchemaField(
             description="Additional data requested via expansions"
         )
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -251,6 +251,7 @@ class TwitterGetUsersBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetUsersBlock.Input,
             output_schema=TwitterGetUsersBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "identifier": {
                     "discriminator": "username_list",
@@ -354,7 +355,7 @@ class TwitterGetUsersBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

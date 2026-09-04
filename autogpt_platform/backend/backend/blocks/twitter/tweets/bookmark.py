@@ -3,9 +3,17 @@ from typing import cast
 import tweepy
 from tweepy.client import Response
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
@@ -25,7 +33,6 @@ from backend.blocks.twitter._types import (
     TweetUserFieldsFilter,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -34,7 +41,7 @@ class TwitterBookmarkTweetBlock(Block):
     Bookmark a tweet on Twitter
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["tweet.read", "bookmark.write", "users.read", "offline.access"]
         )
@@ -44,9 +51,8 @@ class TwitterBookmarkTweetBlock(Block):
             placeholder="Enter tweet ID",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the bookmark was successful")
-        error: str = SchemaField(description="Error message if the bookmark failed")
 
     def __init__(self):
         super().__init__(
@@ -55,6 +61,7 @@ class TwitterBookmarkTweetBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterBookmarkTweetBlock.Input,
             output_schema=TwitterBookmarkTweetBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "tweet_id": "1234567890",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -83,7 +90,7 @@ class TwitterBookmarkTweetBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -121,7 +128,7 @@ class TwitterGetBookmarkedTweetsBlock(Block):
             advanced=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common Outputs that user commonly uses
         id: list[str] = SchemaField(description="All Tweet IDs")
         text: list[str] = SchemaField(description="All Tweet texts")
@@ -138,8 +145,6 @@ class TwitterGetBookmarkedTweetsBlock(Block):
         )
         next_token: str = SchemaField(description="Next token for pagination")
 
-        error: str = SchemaField(description="Error message if the request failed")
-
     def __init__(self):
         super().__init__(
             id="ed26783e-a62f-11ef-9a21-c77c57dd8a1f",
@@ -147,6 +152,7 @@ class TwitterGetBookmarkedTweetsBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetBookmarkedTweetsBlock.Input,
             output_schema=TwitterGetBookmarkedTweetsBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "max_results": 2,
                 "pagination_token": None,
@@ -259,7 +265,7 @@ class TwitterGetBookmarkedTweetsBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -305,7 +311,7 @@ class TwitterRemoveBookmarkTweetBlock(Block):
     Remove a bookmark for a tweet on Twitter
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["tweet.read", "bookmark.write", "users.read", "offline.access"]
         )
@@ -315,7 +321,7 @@ class TwitterRemoveBookmarkTweetBlock(Block):
             placeholder="Enter tweet ID",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(
             description="Whether the bookmark was successfully removed"
         )
@@ -330,6 +336,7 @@ class TwitterRemoveBookmarkTweetBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterRemoveBookmarkTweetBlock.Input,
             output_schema=TwitterRemoveBookmarkTweetBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "tweet_id": "1234567890",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -358,7 +365,7 @@ class TwitterRemoveBookmarkTweetBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

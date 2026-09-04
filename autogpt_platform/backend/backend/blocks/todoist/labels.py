@@ -1,22 +1,29 @@
 from todoist_api_python.api import TodoistAPI
 from typing_extensions import Optional
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.todoist._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TODOIST_OAUTH_IS_CONFIGURED,
     TodoistCredentials,
     TodoistCredentialsField,
     TodoistCredentialsInput,
 )
 from backend.blocks.todoist._types import Colors
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
 class TodoistCreateLabelBlock(Block):
     """Creates a new label in Todoist"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         name: str = SchemaField(description="Name of the label")
         order: Optional[int] = SchemaField(description="Label order", default=None)
@@ -27,13 +34,12 @@ class TodoistCreateLabelBlock(Block):
             description="Whether the label is a favorite", default=False
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         id: str = SchemaField(description="ID of the created label")
         name: str = SchemaField(description="Name of the label")
         color: str = SchemaField(description="Color of the label")
         order: int = SchemaField(description="Label order")
         is_favorite: bool = SchemaField(description="Favorite status")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -42,6 +48,7 @@ class TodoistCreateLabelBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistCreateLabelBlock.Input,
             output_schema=TodoistCreateLabelBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "name": "Test Label",
@@ -78,7 +85,7 @@ class TodoistCreateLabelBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -114,14 +121,13 @@ class TodoistCreateLabelBlock(Block):
 class TodoistListLabelsBlock(Block):
     """Gets all personal labels from Todoist"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         labels: list = SchemaField(description="List of complete label data")
         label_ids: list = SchemaField(description="List of label IDs")
         label_names: list = SchemaField(description="List of label names")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -130,6 +136,7 @@ class TodoistListLabelsBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistListLabelsBlock.Input,
             output_schema=TodoistListLabelsBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={"credentials": TEST_CREDENTIALS_INPUT},
             test_credentials=TEST_CREDENTIALS,
             test_output=[
@@ -171,7 +178,7 @@ class TodoistListLabelsBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -191,18 +198,16 @@ class TodoistListLabelsBlock(Block):
 class TodoistGetLabelBlock(Block):
     """Gets a personal label from Todoist by ID"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         label_id: str = SchemaField(description="ID of the label to retrieve")
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         id: str = SchemaField(description="ID of the label")
         name: str = SchemaField(description="Name of the label")
         color: str = SchemaField(description="Color of the label")
         order: int = SchemaField(description="Label order")
         is_favorite: bool = SchemaField(description="Favorite status")
-
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -211,6 +216,7 @@ class TodoistGetLabelBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistGetLabelBlock.Input,
             output_schema=TodoistGetLabelBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "label_id": "2156154810",
@@ -244,7 +250,7 @@ class TodoistGetLabelBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -268,7 +274,7 @@ class TodoistGetLabelBlock(Block):
 class TodoistUpdateLabelBlock(Block):
     """Updates a personal label in Todoist using ID"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         label_id: str = SchemaField(description="ID of the label to update")
         name: Optional[str] = SchemaField(
@@ -282,9 +288,8 @@ class TodoistUpdateLabelBlock(Block):
             description="Whether the label is a favorite (true/false)", default=False
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the update was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -293,6 +298,7 @@ class TodoistUpdateLabelBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistUpdateLabelBlock.Input,
             output_schema=TodoistUpdateLabelBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "label_id": "2156154810",
@@ -316,7 +322,7 @@ class TodoistUpdateLabelBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -349,13 +355,12 @@ class TodoistUpdateLabelBlock(Block):
 class TodoistDeleteLabelBlock(Block):
     """Deletes a personal label in Todoist"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         label_id: str = SchemaField(description="ID of the label to delete")
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the deletion was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -364,6 +369,7 @@ class TodoistDeleteLabelBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistDeleteLabelBlock.Input,
             output_schema=TodoistDeleteLabelBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "label_id": "2156154810",
@@ -383,7 +389,7 @@ class TodoistDeleteLabelBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -401,12 +407,11 @@ class TodoistDeleteLabelBlock(Block):
 class TodoistGetSharedLabelsBlock(Block):
     """Gets all shared labels from Todoist"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         labels: list = SchemaField(description="List of shared label names")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -415,6 +420,7 @@ class TodoistGetSharedLabelsBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistGetSharedLabelsBlock.Input,
             output_schema=TodoistGetSharedLabelsBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={"credentials": TEST_CREDENTIALS_INPUT},
             test_credentials=TEST_CREDENTIALS,
             test_output=[("labels", ["Label1", "Label2", "Label3"])],
@@ -437,7 +443,7 @@ class TodoistGetSharedLabelsBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -455,14 +461,13 @@ class TodoistGetSharedLabelsBlock(Block):
 class TodoistRenameSharedLabelsBlock(Block):
     """Renames all instances of a shared label"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         name: str = SchemaField(description="The name of the existing label to rename")
         new_name: str = SchemaField(description="The new name for the label")
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the rename was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -471,6 +476,7 @@ class TodoistRenameSharedLabelsBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistRenameSharedLabelsBlock.Input,
             output_schema=TodoistRenameSharedLabelsBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "name": "OldLabel",
@@ -491,7 +497,7 @@ class TodoistRenameSharedLabelsBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -511,13 +517,12 @@ class TodoistRenameSharedLabelsBlock(Block):
 class TodoistRemoveSharedLabelsBlock(Block):
     """Removes all instances of a shared label"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         name: str = SchemaField(description="The name of the label to remove")
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the removal was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -526,6 +531,7 @@ class TodoistRemoveSharedLabelsBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistRemoveSharedLabelsBlock.Input,
             output_schema=TodoistRemoveSharedLabelsBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={"credentials": TEST_CREDENTIALS_INPUT, "name": "LabelToRemove"},
             test_credentials=TEST_CREDENTIALS,
             test_output=[("success", True)],
@@ -542,7 +548,7 @@ class TodoistRemoveSharedLabelsBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

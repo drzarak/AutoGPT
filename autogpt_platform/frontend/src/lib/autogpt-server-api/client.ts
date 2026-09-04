@@ -1,5 +1,12 @@
-import { SupabaseClient } from "@supabase/supabase-js";
-import {
+import { IMPERSONATION_HEADER_NAME } from "@/lib/constants";
+import { getWebSocketToken } from "@/lib/auth/actions";
+import { ImpersonationState } from "@/lib/impersonation";
+import { getDatafastAttribution } from "@/services/analytics/datafast-attribution";
+import { environment } from "@/services/environment";
+import { Key, storage } from "@/services/storage/local-storage";
+import * as Sentry from "@sentry/nextjs";
+import type {
+  AddUserCreditsResponse,
   AnalyticsDetails,
   AnalyticsMetrics,
   APIKey,
@@ -7,91 +14,109 @@ import {
   APIKeyPermission,
   Block,
   CreateAPIKeyResponse,
-  CreateLibraryAgentPresetRequest,
-  CreatorDetails,
-  CreatorsResponse,
   Credentials,
   CredentialsDeleteNeedConfirmationResponse,
   CredentialsDeleteResponse,
+  CredentialsMetaInput,
   CredentialsMetaResponse,
   Graph,
   GraphCreatable,
   GraphExecution,
   GraphExecutionID,
   GraphExecutionMeta,
+  GraphExecutionsResponse,
   GraphID,
   GraphMeta,
   GraphUpdateable,
+  HostScopedCredentials,
   LibraryAgent,
   LibraryAgentID,
   LibraryAgentPreset,
+  LibraryAgentPresetCreatable,
+  LibraryAgentPresetCreatableFromGraphExecution,
+  LibraryAgentPresetID,
   LibraryAgentPresetResponse,
+  LibraryAgentPresetUpdatable,
   LibraryAgentResponse,
   LibraryAgentSortEnum,
-  MyAgentsResponse,
   NodeExecutionResult,
   NotificationPreference,
   NotificationPreferenceDTO,
-  ProfileDetails,
+  OttoQuery,
+  OttoResponse,
   RefundRequest,
   Schedule,
   ScheduleCreatable,
   ScheduleID,
-  StoreAgentDetails,
-  StoreAgentsResponse,
-  StoreReview,
-  StoreReviewCreate,
-  StoreSubmission,
-  StoreSubmissionRequest,
-  StoreSubmissionsResponse,
+  SkippedWebhookPreset,
   TransactionHistory,
   User,
   UserPasswordCredentials,
-  OttoQuery,
-  OttoResponse,
-  UserOnboarding,
+  UsersBalanceHistoryResponse,
+  WebSocketNotification,
 } from "./types";
-import { createBrowserClient } from "@supabase/ssr";
-import getServerSupabase from "../supabase/getServerSupabase";
 
-const isClient = typeof window !== "undefined";
+const isClient = environment.isClientSide();
+
+/**
+ * Thrown when a request fails because the user is logging out.
+ * Callers can catch this specifically to silently ignore logout-related failures,
+ * rather than receiving null and crashing on property access.
+ */
+export class LogoutInterruptError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LogoutInterruptError";
+  }
+}
+
+/**
+ * Build the query object for `oAuthLogin`.  Kept as a named helper so the
+ * shape — scopes-only vs credential_id-only vs both vs neither — can be
+ * pinned in tests without mocking the whole BackendAPI request layer.
+ *
+ * Returns `undefined` when neither argument is provided so callers can
+ * omit the query string entirely.
+ */
+export function buildOAuthLoginQuery(
+  scopes?: string[],
+  credentialID?: string,
+): Record<string, string> | undefined {
+  const query: Record<string, string> = {};
+  if (scopes && scopes.length > 0) query.scopes = scopes.join(",");
+  if (credentialID) query.credential_id = credentialID;
+  return Object.keys(query).length > 0 ? query : undefined;
+}
 
 export default class BackendAPI {
   private baseUrl: string;
   private wsUrl: string;
   private webSocket: WebSocket | null = null;
   private wsConnecting: Promise<void> | null = null;
+  private wsOnConnectHandlers: Set<() => void> = new Set();
+  private wsOnDisconnectHandlers: Set<() => void> = new Set();
   private wsMessageHandlers: Record<string, Set<(data: any) => void>> = {};
-  heartbeatInterval: number | null = null;
-  readonly HEARTBEAT_INTERVAL = 10_0000; // 100 seconds
+  private isIntentionallyDisconnected: boolean = false;
+
+  readonly HEARTBEAT_INTERVAL = 100_000; // 100 seconds
   readonly HEARTBEAT_TIMEOUT = 10_000; // 10 seconds
-  heartbeatTimeoutId: number | null = null;
+  heartbeatIntervalID: number | null = null;
+  heartbeatTimeoutID: number | null = null;
 
   constructor(
-    baseUrl: string = process.env.NEXT_PUBLIC_AGPT_SERVER_URL ||
-      "http://localhost:8006/api",
-    wsUrl: string = process.env.NEXT_PUBLIC_AGPT_WS_SERVER_URL ||
-      "ws://localhost:8001/ws",
+    baseUrl: string = environment.getAGPTServerApiUrl(),
+    wsUrl: string = environment.getAGPTWsServerUrl(),
   ) {
     this.baseUrl = baseUrl;
     this.wsUrl = wsUrl;
   }
 
-  private get supabaseClient(): SupabaseClient | null {
-    return isClient
-      ? createBrowserClient(
-          process.env.NEXT_PUBLIC_SUPABASE_URL!,
-          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        )
-      : getServerSupabase();
-  }
-
   async isAuthenticated(): Promise<boolean> {
-    if (!this.supabaseClient) return false;
-    const {
-      data: { user },
-    } = await this.supabaseClient?.auth.getUser();
-    return user != null;
+    // getWebSocketToken is a server action, so this works from both the
+    // client (RPC) and the server (direct call); a token is only minted
+    // when a valid session exists.
+    const { token, error } = await getWebSocketToken();
+    return token != null && !error;
   }
 
   createUser(): Promise<User> {
@@ -103,13 +128,21 @@ export default class BackendAPI {
   }
 
   ////////////////////////////////////////
-  ///////////// CREDITS //////////////////
+  /////////////// CREDITS ////////////////
   ////////////////////////////////////////
-  getUserCredit(): Promise<{ credits: number }> {
+
+  async getUserCredit(): Promise<{ credits: number | null }> {
     try {
-      return this._get("/credits");
+      const response = await this._get("/credits");
+      return response ?? { credits: 0 };
     } catch (error) {
-      return Promise.resolve({ credits: 0 });
+      if (!(error instanceof LogoutInterruptError)) {
+        Sentry.captureException(error);
+      }
+      // Return null (rather than 0) so callers can distinguish a real $0
+      // balance from a failed fetch — used by TopUpPromptProvider to avoid
+      // nudging users to top up on transient API errors.
+      return { credits: null };
     }
   }
 
@@ -169,23 +202,9 @@ export default class BackendAPI {
   }
 
   ////////////////////////////////////////
-  /////////// ONBOARDING /////////////////
+  //////////////// GRAPHS ////////////////
   ////////////////////////////////////////
-  getUserOnboarding(): Promise<UserOnboarding> {
-    return this._get("/onboarding");
-  }
 
-  updateUserOnboarding(onboarding: Partial<UserOnboarding>): Promise<void> {
-    return this._request("PATCH", "/onboarding", onboarding);
-  }
-
-  getOnboardingAgents(): Promise<StoreAgentDetails[]> {
-    return this._get("/onboarding/agents");
-  }
-
-  ////////////////////////////////////////
-  /////////// GRAPHS /////////////////////
-  ////////////////////////////////////////
   getBlocks(): Promise<Block[]> {
     return this._get("/blocks");
   }
@@ -194,32 +213,46 @@ export default class BackendAPI {
     return this._get(`/graphs`);
   }
 
-  getGraph(
+  async getGraph(
     id: GraphID,
     version?: number,
-    hide_credentials?: boolean,
+    for_export?: boolean,
   ): Promise<Graph> {
-    let query: Record<string, any> = {};
+    const query: Record<string, any> = {};
     if (version !== undefined) {
       query["version"] = version;
     }
-    if (hide_credentials !== undefined) {
-      query["hide_credentials"] = hide_credentials;
+    if (for_export !== undefined) {
+      query["for_export"] = for_export;
     }
-    return this._get(`/graphs/${id}`, query);
+    const graph = await this._get(`/graphs/${id}`, query);
+    if (for_export) delete graph.user_id;
+    return graph;
   }
 
   getGraphAllVersions(id: GraphID): Promise<Graph[]> {
     return this._get(`/graphs/${id}/versions`);
   }
 
-  createGraph(graph: GraphCreatable): Promise<Graph> {
-    let requestBody = { graph } as GraphCreateRequestBody;
+  createGraph(
+    graph: GraphCreatable,
+    source?: GraphCreationSource,
+  ): Promise<Graph> {
+    const requestBody: GraphCreateRequestBody = { graph };
+    if (source) {
+      requestBody.source = source;
+    }
 
     return this._request("POST", "/graphs", requestBody);
   }
 
-  updateGraph(id: GraphID, graph: GraphUpdateable): Promise<Graph> {
+  updateGraph(
+    id: GraphID,
+    graph: GraphUpdateable,
+  ): Promise<{
+    graph: Graph;
+    skipped_webhook_presets?: SkippedWebhookPreset[];
+  }> {
     return this._request("PUT", `/graphs/${id}`, graph);
   }
 
@@ -227,7 +260,10 @@ export default class BackendAPI {
     return this._request("DELETE", `/graphs/${id}`);
   }
 
-  setGraphActiveVersion(id: GraphID, version: number): Promise<Graph> {
+  setGraphActiveVersion(
+    id: GraphID,
+    version: number,
+  ): Promise<{ skipped_webhook_presets?: SkippedWebhookPreset[] }> {
     return this._request("PUT", `/graphs/${id}/versions/active`, {
       active_graph_version: version,
     });
@@ -236,17 +272,27 @@ export default class BackendAPI {
   executeGraph(
     id: GraphID,
     version: number,
-    inputData: { [key: string]: any } = {},
-  ): Promise<{ graph_exec_id: GraphExecutionID }> {
-    return this._request("POST", `/graphs/${id}/execute/${version}`, inputData);
+    inputs: { [key: string]: any } = {},
+    credentials_inputs: { [key: string]: CredentialsMetaInput } = {},
+    source?: GraphExecutionSource,
+  ): Promise<GraphExecutionMeta> {
+    const body: GraphExecuteRequestBody = { inputs, credentials_inputs };
+    if (source) {
+      body.source = source;
+    }
+    return this._request("POST", `/graphs/${id}/execute/${version}`, body);
   }
 
   getExecutions(): Promise<GraphExecutionMeta[]> {
-    return this._get(`/executions`);
+    return this._get(`/executions`).then((results) =>
+      results.map(parseGraphExecutionTimestamps),
+    );
   }
 
-  getGraphExecutions(graphID: GraphID): Promise<GraphExecutionMeta[]> {
-    return this._get(`/graphs/${graphID}/executions`);
+  getGraphExecutions(graphID: GraphID): Promise<GraphExecutionsResponse> {
+    return this._get(`/graphs/${graphID}/executions`).then((results) =>
+      results.map(parseGraphExecutionTimestamps),
+    );
   }
 
   async getGraphExecutionInfo(
@@ -254,10 +300,7 @@ export default class BackendAPI {
     runID: GraphExecutionID,
   ): Promise<GraphExecution> {
     const result = await this._get(`/graphs/${graphID}/executions/${runID}`);
-    result.node_executions = result.node_executions.map(
-      parseNodeExecutionResultTimestamps,
-    );
-    return result;
+    return parseGraphExecutionTimestamps<GraphExecution>(result);
   }
 
   async stopGraphExecution(
@@ -268,10 +311,7 @@ export default class BackendAPI {
       "POST",
       `/graphs/${graphID}/executions/${runID}/stop`,
     );
-    result.node_executions = result.node_executions.map(
-      parseNodeExecutionResultTimestamps,
-    );
-    return result;
+    return parseGraphExecutionTimestamps<GraphExecution>(result);
   }
 
   async deleteGraphExecution(runID: GraphExecutionID): Promise<void> {
@@ -281,9 +321,16 @@ export default class BackendAPI {
   oAuthLogin(
     provider: string,
     scopes?: string[],
-  ): Promise<{ login_url: string; state_token: string }> {
-    const query = scopes ? { scopes: scopes.join(",") } : undefined;
-    return this._get(`/integrations/${provider}/login`, query);
+    credentialID?: string,
+  ): Promise<{
+    login_url: string;
+    state_token: string;
+    cancel_url?: string | null;
+  }> {
+    return this._get(
+      `/integrations/${provider}/login`,
+      buildOAuthLoginQuery(scopes, credentialID),
+    );
   }
 
   oAuthCallback(
@@ -315,6 +362,30 @@ export default class BackendAPI {
       `/integrations/${credentials.provider}/credentials`,
       { ...credentials, type: "user_password" },
     );
+  }
+
+  createHostScopedCredentials(
+    credentials: Omit<HostScopedCredentials, "id" | "type">,
+  ): Promise<HostScopedCredentials> {
+    return this._request(
+      "POST",
+      `/integrations/${credentials.provider}/credentials`,
+      { ...credentials, type: "host_scoped" },
+    );
+  }
+
+  async listProviders(): Promise<string[]> {
+    // The endpoint returns `ProviderMetadata[]` (`{ name, description }`) but
+    // legacy consumers (e.g. CredentialsProvider) still expect a flat string[]
+    // of provider names. Map down so we keep that contract.
+    const response: Array<{ name: string }> = await this._get(
+      "/integrations/providers",
+    );
+    return response.map((p) => p.name);
+  }
+
+  listSystemProviders(): Promise<string[]> {
+    return this._get("/integrations/providers/system");
   }
 
   listCredentials(provider?: string): Promise<CredentialsMetaResponse[]> {
@@ -390,128 +461,57 @@ export default class BackendAPI {
     return this._request("POST", "/analytics/log_raw_analytics", analytic);
   }
 
-  ///////////////////////////////////////////
-  /////////// V2 STORE API /////////////////
-  /////////////////////////////////////////
-
-  getStoreProfile(): Promise<ProfileDetails | null> {
-    try {
-      const result = this._get("/store/profile");
-      return result;
-    } catch (error) {
-      console.error("Error fetching store profile:", error);
-      return Promise.resolve(null);
+  async uploadFile(
+    file: File,
+    expiration_hours: number = 24,
+    onProgress?: (progress: number) => void,
+  ): Promise<{
+    file_uri: string;
+    file_name: string;
+    size: number;
+    content_type: string;
+    expires_in_hours: number;
+  }> {
+    const response = await this._uploadFileWithProgress(
+      "/files/upload",
+      file,
+      { expiration_hours },
+      onProgress,
+    );
+    if (typeof response === "string") {
+      return JSON.parse(response);
     }
-  }
-
-  getStoreAgents(params?: {
-    featured?: boolean;
-    creator?: string;
-    sorted_by?: string;
-    search_query?: string;
-    category?: string;
-    page?: number;
-    page_size?: number;
-  }): Promise<StoreAgentsResponse> {
-    return this._get("/store/agents", params);
-  }
-
-  getStoreAgent(
-    username: string,
-    agentName: string,
-  ): Promise<StoreAgentDetails> {
-    return this._get(
-      `/store/agents/${encodeURIComponent(username)}/${encodeURIComponent(
-        agentName,
-      )}`,
-    );
-  }
-
-  getStoreCreators(params?: {
-    featured?: boolean;
-    search_query?: string;
-    sorted_by?: string;
-    page?: number;
-    page_size?: number;
-  }): Promise<CreatorsResponse> {
-    return this._get("/store/creators", params);
-  }
-
-  getStoreCreator(username: string): Promise<CreatorDetails> {
-    return this._get(`/store/creator/${encodeURIComponent(username)}`);
-  }
-
-  getStoreSubmissions(params?: {
-    page?: number;
-    page_size?: number;
-  }): Promise<StoreSubmissionsResponse> {
-    return this._get("/store/submissions", params);
-  }
-
-  createStoreSubmission(
-    submission: StoreSubmissionRequest,
-  ): Promise<StoreSubmission> {
-    return this._request("POST", "/store/submissions", submission);
-  }
-
-  generateStoreSubmissionImage(
-    agent_id: string,
-  ): Promise<{ image_url: string }> {
-    return this._request(
-      "POST",
-      "/store/submissions/generate_image?agent_id=" + agent_id,
-    );
-  }
-
-  deleteStoreSubmission(submission_id: string): Promise<boolean> {
-    return this._request("DELETE", `/store/submissions/${submission_id}`);
-  }
-
-  uploadStoreSubmissionMedia(file: File): Promise<string> {
-    const formData = new FormData();
-    formData.append("file", file);
-    return this._uploadFile("/store/submissions/media", file);
-  }
-
-  updateStoreProfile(profile: ProfileDetails): Promise<ProfileDetails> {
-    return this._request("POST", "/store/profile", profile);
-  }
-
-  reviewAgent(
-    username: string,
-    agentName: string,
-    review: StoreReviewCreate,
-  ): Promise<StoreReview> {
-    return this._request(
-      "POST",
-      `/store/agents/${encodeURIComponent(username)}/${encodeURIComponent(
-        agentName,
-      )}/review`,
-      review,
-    );
-  }
-
-  getMyAgents(params?: {
-    page?: number;
-    page_size?: number;
-  }): Promise<MyAgentsResponse> {
-    return this._get("/store/myagents", params);
-  }
-
-  downloadStoreAgent(
-    storeListingVersionId: string,
-    version?: number,
-  ): Promise<BlobPart> {
-    const url = version
-      ? `/store/download/agents/${storeListingVersionId}?version=${version}`
-      : `/store/download/agents/${storeListingVersionId}`;
-
-    return this._get(url);
+    return response;
   }
 
   /////////////////////////////////////////
-  /////////// V2 LIBRARY API //////////////
+  /////////// Admin API ///////////////////
   /////////////////////////////////////////
+
+  addUserCredits(
+    user_id: string,
+    amount: number,
+    comments: string,
+  ): Promise<AddUserCreditsResponse> {
+    return this._request("POST", "/credits/admin/add_credits", {
+      user_id,
+      amount,
+      comments,
+    });
+  }
+
+  getUsersHistory(params?: {
+    search?: string;
+    page?: number;
+    page_size?: number;
+    transaction_filter?: string;
+  }): Promise<UsersBalanceHistoryResponse> {
+    return this._get("/credits/admin/users_history", params);
+  }
+
+  ////////////////////////////////////////
+  //////////// V2 LIBRARY API ////////////
+  ////////////////////////////////////////
 
   listLibraryAgents(params?: {
     search_term?: string;
@@ -522,68 +522,121 @@ export default class BackendAPI {
     return this._get("/library/agents", params);
   }
 
+  listFavoriteLibraryAgents(params?: {
+    page?: number;
+    page_size?: number;
+  }): Promise<LibraryAgentResponse> {
+    return this._get("/library/agents/favorites", params);
+  }
+
   getLibraryAgent(id: LibraryAgentID): Promise<LibraryAgent> {
     return this._get(`/library/agents/${id}`);
   }
 
-  addMarketplaceAgentToLibrary(
-    storeListingVersionID: string,
+  getLibraryAgentByStoreListingVersionID(
+    storeListingVersionId: string,
+  ): Promise<LibraryAgent | null> {
+    return this._get(`/library/agents/marketplace/${storeListingVersionId}`);
+  }
+
+  getLibraryAgentByGraphID(
+    graphID: GraphID,
+    graphVersion?: number,
   ): Promise<LibraryAgent> {
-    return this._request("POST", "/library/agents", {
-      store_listing_version_id: storeListingVersionID,
+    return this._get(`/library/agents/by-graph/${graphID}`, {
+      version: graphVersion,
     });
   }
 
-  async updateLibraryAgent(
+  updateLibraryAgent(
     libraryAgentId: LibraryAgentID,
     params: {
       auto_update_version?: boolean;
       is_favorite?: boolean;
       is_archived?: boolean;
-      is_deleted?: boolean;
     },
-  ): Promise<void> {
-    await this._request("PUT", `/library/agents/${libraryAgentId}`, params);
+  ): Promise<LibraryAgent> {
+    return this._request("PATCH", `/library/agents/${libraryAgentId}`, params);
   }
 
-  listLibraryAgentPresets(params?: {
+  async deleteLibraryAgent(libraryAgentId: LibraryAgentID): Promise<void> {
+    await this._request("DELETE", `/library/agents/${libraryAgentId}`);
+  }
+
+  forkLibraryAgent(libraryAgentId: LibraryAgentID): Promise<LibraryAgent> {
+    return this._request("POST", `/library/agents/${libraryAgentId}/fork`);
+  }
+
+  async setupAgentTrigger(params: {
+    name: string;
+    description?: string;
+    graph_id: GraphID;
+    graph_version: number;
+    trigger_config: Record<string, any>;
+    agent_credentials: Record<string, CredentialsMetaInput>;
+  }): Promise<LibraryAgentPreset> {
+    return parseLibraryAgentPresetTimestamp(
+      await this._request("POST", `/library/presets/setup-trigger`, params),
+    );
+  }
+
+  async listLibraryAgentPresets(params?: {
+    graph_id?: GraphID;
     page?: number;
     page_size?: number;
   }): Promise<LibraryAgentPresetResponse> {
-    return this._get("/library/presets", params);
+    const response: LibraryAgentPresetResponse = await this._get(
+      "/library/presets",
+      params,
+    );
+    return {
+      ...response,
+      presets: response.presets.map(parseLibraryAgentPresetTimestamp),
+    };
   }
 
-  getLibraryAgentPreset(presetId: string): Promise<LibraryAgentPreset> {
-    return this._get(`/library/presets/${presetId}`);
-  }
-
-  createLibraryAgentPreset(
-    preset: CreateLibraryAgentPresetRequest,
+  async getLibraryAgentPreset(
+    presetID: LibraryAgentPresetID,
   ): Promise<LibraryAgentPreset> {
-    return this._request("POST", "/library/presets", preset);
+    const preset = await this._get(`/library/presets/${presetID}`);
+    return parseLibraryAgentPresetTimestamp(preset);
   }
 
-  updateLibraryAgentPreset(
-    presetId: string,
-    preset: CreateLibraryAgentPresetRequest,
+  async createLibraryAgentPreset(
+    params:
+      | LibraryAgentPresetCreatable
+      | LibraryAgentPresetCreatableFromGraphExecution,
   ): Promise<LibraryAgentPreset> {
-    return this._request("PUT", `/library/presets/${presetId}`, preset);
+    const new_preset = await this._request("POST", "/library/presets", params);
+    return parseLibraryAgentPresetTimestamp(new_preset);
   }
 
-  async deleteLibraryAgentPreset(presetId: string): Promise<void> {
-    await this._request("DELETE", `/library/presets/${presetId}`);
+  async updateLibraryAgentPreset(
+    presetID: LibraryAgentPresetID,
+    partial_preset: LibraryAgentPresetUpdatable,
+  ): Promise<LibraryAgentPreset> {
+    const updated_preset = await this._request(
+      "PATCH",
+      `/library/presets/${presetID}`,
+      partial_preset,
+    );
+    return parseLibraryAgentPresetTimestamp(updated_preset);
+  }
+
+  async deleteLibraryAgentPreset(
+    presetID: LibraryAgentPresetID,
+  ): Promise<void> {
+    await this._request("DELETE", `/library/presets/${presetID}`);
   }
 
   executeLibraryAgentPreset(
-    presetId: string,
-    graphId: GraphID,
-    graphVersion: number,
-    nodeInput: { [key: string]: any },
-  ): Promise<{ id: string }> {
-    return this._request("POST", `/library/presets/${presetId}/execute`, {
-      graph_id: graphId,
-      graph_version: graphVersion,
-      node_input: nodeInput,
+    presetID: LibraryAgentPresetID,
+    inputs?: Record<string, any>,
+    credential_inputs?: Record<string, CredentialsMetaInput>,
+  ): Promise<GraphExecutionMeta> {
+    return this._request("POST", `/library/presets/${presetID}/execute`, {
+      inputs,
+      credential_inputs,
     });
   }
 
@@ -591,77 +644,210 @@ export default class BackendAPI {
   /////////// SCHEDULES ////////////
   //////////////////////////////////
 
-  async createSchedule(schedule: ScheduleCreatable): Promise<Schedule> {
-    return this._request("POST", `/schedules`, schedule).then(
-      parseScheduleTimestamp,
+  async createGraphExecutionSchedule(
+    params: ScheduleCreatable,
+  ): Promise<Schedule> {
+    return this._request(
+      "POST",
+      `/graphs/${params.graph_id}/schedules`,
+      params,
+    ).then(parseScheduleTimestamp);
+  }
+
+  async listGraphExecutionSchedules(graphID: GraphID): Promise<Schedule[]> {
+    return this._get(`/graphs/${graphID}/schedules`).then((schedules) =>
+      schedules.map(parseScheduleTimestamp),
     );
   }
 
-  async deleteSchedule(scheduleId: ScheduleID): Promise<{ id: string }> {
-    return this._request("DELETE", `/schedules/${scheduleId}`);
-  }
-
-  async listSchedules(): Promise<Schedule[]> {
+  /** @deprecated only used in legacy `Monitor` */
+  async listAllGraphsExecutionSchedules(): Promise<Schedule[]> {
     return this._get(`/schedules`).then((schedules) =>
       schedules.map(parseScheduleTimestamp),
     );
   }
 
-  ///////////////////////////////////////////
-  /////////// INTERNAL FUNCTIONS ////////////
-  //////////////////////////////??///////////
-
-  private _get(path: string, query?: Record<string, any>) {
-    return this._request("GET", path, query);
+  async deleteGraphExecutionSchedule(
+    scheduleID: ScheduleID,
+  ): Promise<{ id: ScheduleID }> {
+    return this._request("DELETE", `/schedules/${scheduleID}`);
   }
+
+  //////////////////////////////////
+  ////////////// OTTO //////////////
+  //////////////////////////////////
 
   async askOtto(query: OttoQuery): Promise<OttoResponse> {
     return this._request("POST", "/otto/ask", query);
   }
 
+  ////////////////////////////////////////
+  ////////// INTERNAL FUNCTIONS //////////
+  ////////////////////////////////////////
+
+  private _get(path: string, query?: Record<string, any>) {
+    return this._request("GET", path, query);
+  }
+
   private async _uploadFile(path: string, file: File): Promise<string> {
-    // Get session with retry logic
-    let token = "no-token-found";
-    let retryCount = 0;
-    const maxRetries = 3;
-
-    while (retryCount < maxRetries) {
-      const {
-        data: { session },
-      } = (await this.supabaseClient?.auth.getSession()) || {
-        data: { session: null },
-      };
-
-      if (session?.access_token) {
-        token = session.access_token;
-        break;
-      }
-
-      retryCount++;
-      if (retryCount < maxRetries) {
-        await new Promise((resolve) => setTimeout(resolve, 100 * retryCount));
-      }
-    }
-
-    // Create a FormData object and append the file
     const formData = new FormData();
     formData.append("file", file);
 
-    const response = await fetch(this.baseUrl + path, {
+    if (isClient) {
+      return this._makeClientFileUpload(path, formData);
+    } else {
+      return this._makeServerFileUpload(path, formData);
+    }
+  }
+
+  private async _uploadFileWithProgress(
+    path: string,
+    file: File,
+    params?: Record<string, any>,
+    onProgress?: (progress: number) => void,
+  ): Promise<string> {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    if (isClient) {
+      return this._makeClientFileUploadWithProgress(
+        path,
+        formData,
+        params,
+        onProgress,
+      );
+    } else {
+      return this._makeServerFileUploadWithProgress(path, formData, params);
+    }
+  }
+
+  private async _makeClientFileUpload(
+    path: string,
+    formData: FormData,
+  ): Promise<string> {
+    // Dynamic import is required even for client-only functions because helpers.ts
+    // has server-only imports (like getBackendAuthToken) at the top level. Static imports
+    // would bundle server-only code into the client bundle, causing runtime errors.
+    const { buildClientUrl, handleFetchError } = await import("./helpers");
+
+    const uploadUrl = buildClientUrl(path);
+
+    const response = await fetch(uploadUrl, {
       method: "POST",
-      headers: {
-        ...(token && { Authorization: `Bearer ${token}` }),
-      },
       body: formData,
+      credentials: "include",
     });
 
     if (!response.ok) {
-      throw new Error(`Error uploading file: ${response.statusText}`);
+      throw await handleFetchError(response);
     }
 
-    // Parse the response appropriately
-    const media_url = await response.text();
-    return media_url;
+    return await response.json();
+  }
+
+  private async _makeServerFileUpload(
+    path: string,
+    formData: FormData,
+  ): Promise<string> {
+    const { makeAuthenticatedFileUpload, buildServerUrl } = await import(
+      "./helpers"
+    );
+    const url = buildServerUrl(path);
+    return await makeAuthenticatedFileUpload(url, formData);
+  }
+
+  private async _makeClientFileUploadWithProgress(
+    path: string,
+    formData: FormData,
+    params?: Record<string, any>,
+    onProgress?: (progress: number) => void,
+  ): Promise<any> {
+    const { buildClientUrl, buildUrlWithQuery } = await import("./helpers");
+
+    let url = buildClientUrl(path);
+    if (params) {
+      url = buildUrlWithQuery(url, params);
+    }
+
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+
+      if (onProgress) {
+        xhr.upload.addEventListener("progress", (e) => {
+          if (e.lengthComputable) {
+            const progress = (e.loaded / e.total) * 100;
+            onProgress(progress);
+          }
+        });
+      }
+
+      xhr.addEventListener("load", () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const response = JSON.parse(xhr.responseText);
+            resolve(response);
+          } catch (_error) {
+            reject(new Error("Invalid JSON response"));
+          }
+        } else {
+          // Handle file size errors with user-friendly message
+          if (xhr.status === 413) {
+            reject(new Error("File is too large — max size is 256MB"));
+            return;
+          }
+
+          // Try to parse error response for better messages
+          let errorMessage = `Upload failed (${xhr.status})`;
+          try {
+            const errorData = JSON.parse(xhr.responseText);
+            if (errorData.detail) {
+              if (
+                typeof errorData.detail === "string" &&
+                errorData.detail.includes("exceeds the maximum")
+              ) {
+                const match = errorData.detail.match(
+                  /maximum allowed size of (\d+)MB/,
+                );
+                const maxSize = match ? match[1] : "256";
+                errorMessage = `File is too large — max size is ${maxSize}MB`;
+              } else if (typeof errorData.detail === "string") {
+                errorMessage = errorData.detail;
+              }
+            } else if (errorData.error) {
+              errorMessage = errorData.error;
+            }
+          } catch {
+            // Keep default message if parsing fails
+          }
+
+          reject(new Error(errorMessage));
+        }
+      });
+
+      xhr.addEventListener("error", () => {
+        reject(new Error("Network error"));
+      });
+
+      xhr.open("POST", url);
+      xhr.withCredentials = true;
+      xhr.send(formData);
+    });
+  }
+
+  private async _makeServerFileUploadWithProgress(
+    path: string,
+    formData: FormData,
+    params?: Record<string, any>,
+  ): Promise<string> {
+    const { makeAuthenticatedFileUpload, buildServerUrl, buildUrlWithQuery } =
+      await import("./helpers");
+
+    let url = buildServerUrl(path);
+    if (params) {
+      url = buildUrlWithQuery(url, params);
+    }
+
+    return await makeAuthenticatedFileUpload(url, formData);
   }
 
   private async _request(
@@ -673,221 +859,144 @@ export default class BackendAPI {
       console.debug(`${method} ${path} payload:`, payload);
     }
 
-    // Get session with retry logic
-    let token = "no-token-found";
-    let retryCount = 0;
-    const maxRetries = 3;
-
-    while (retryCount < maxRetries) {
-      const {
-        data: { session },
-      } = (await this.supabaseClient?.auth.getSession()) || {
-        data: { session: null },
-      };
-
-      if (session?.access_token) {
-        token = session.access_token;
-        break;
-      }
-
-      retryCount++;
-      if (retryCount < maxRetries) {
-        await new Promise((resolve) => setTimeout(resolve, 100 * retryCount));
-      }
+    if (isClient) {
+      return this._makeClientRequest(method, path, payload);
+    } else {
+      return this._makeServerRequest(method, path, payload);
     }
+  }
 
-    let url = this.baseUrl + path;
+  private async _makeClientRequest(
+    method: string,
+    path: string,
+    payload?: Record<string, any>,
+  ) {
+    // Dynamic import is required even for client-only functions because helpers.ts
+    // has server-only imports (like getBackendAuthToken) at the top level. Static imports
+    // would bundle server-only code into the client bundle, causing runtime errors.
+    const {
+      buildClientUrl,
+      buildUrlWithQuery,
+      handleFetchError,
+      isLogoutInProgress,
+      isAuthenticationError,
+    } = await import("./helpers");
+
     const payloadAsQuery = ["GET", "DELETE"].includes(method);
+    let url = buildClientUrl(path);
+
     if (payloadAsQuery && payload) {
-      // For GET requests, use payload as query
-      const queryParams = new URLSearchParams(payload);
-      url += `?${queryParams.toString()}`;
+      url = buildUrlWithQuery(url, payload);
     }
 
-    const hasRequestBody = !payloadAsQuery && payload !== undefined;
+    // Prepare headers with admin impersonation support
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+
+    const impersonatedUserId = ImpersonationState.get();
+    if (impersonatedUserId) {
+      headers[IMPERSONATION_HEADER_NAME] = impersonatedUserId;
+    }
+
+    Object.assign(headers, getDatafastAttribution());
+
     const response = await fetch(url, {
       method,
-      headers: {
-        ...(hasRequestBody && { "Content-Type": "application/json" }),
-        ...(token && { Authorization: `Bearer ${token}` }),
-      },
-      body: hasRequestBody ? JSON.stringify(payload) : undefined,
+      headers,
+      body: !payloadAsQuery && payload ? JSON.stringify(payload) : undefined,
+      credentials: "include",
     });
 
     if (!response.ok) {
-      console.warn(`${method} ${path} returned non-OK response:`, response);
-
-      // console.warn("baseClient is attempting to redirect by changing window location")
-      // if (
-      //   response.status === 403 &&
-      //   response.statusText === "Not authenticated" &&
-      //   typeof window !== "undefined" // Check if in browser environment
-      // ) {
-      //   window.location.href = "/login";
-      // }
-
-      let errorDetail;
-      try {
-        const errorData = await response.json();
-        if (
-          Array.isArray(errorData.detail) &&
-          errorData.detail.length > 0 &&
-          errorData.detail[0].loc
-        ) {
-          // This appears to be a Pydantic validation error
-          const errors = errorData.detail.map(
-            (err: _PydanticValidationError) => {
-              const location = err.loc.join(" -> ");
-              return `${location}: ${err.msg}`;
-            },
-          );
-          errorDetail = errors.join("\n");
-        } else {
-          errorDetail = errorData.detail || response.statusText;
-        }
-      } catch (e) {
-        errorDetail = response.statusText;
+      const error = await handleFetchError(response);
+      if (
+        isAuthenticationError(response, error.message) &&
+        isLogoutInProgress()
+      ) {
+        console.debug(
+          "Authentication request failed during logout, ignoring:",
+          error.message,
+        );
+        throw new LogoutInterruptError("Request cancelled: logout in progress");
       }
-
-      throw new Error(errorDetail);
+      throw error;
     }
 
-    // Handle responses with no content (like DELETE requests)
     if (
       response.status === 204 ||
       response.headers.get("Content-Length") === "0"
     ) {
       return null;
     }
-
-    try {
-      return await response.json();
-    } catch (e) {
-      if (e instanceof SyntaxError) {
-        console.warn(`${method} ${path} returned invalid JSON:`, e);
-        return null;
-      }
-      throw e;
-    }
+    return await response.json();
   }
 
-  startHeartbeat() {
-    this.stopHeartbeat();
-    this.heartbeatInterval = window.setInterval(() => {
-      if (this.webSocket?.readyState === WebSocket.OPEN) {
-        this.webSocket.send(
-          JSON.stringify({
-            method: "heartbeat",
-            data: "ping",
-            success: true,
-          }),
-        );
+  private async _makeServerRequest(
+    method: string,
+    path: string,
+    payload?: Record<string, any>,
+  ) {
+    const { makeAuthenticatedRequest, buildServerUrl } = await import(
+      "./helpers"
+    );
+    const url = buildServerUrl(path);
 
-        this.heartbeatTimeoutId = window.setTimeout(() => {
-          console.warn("Heartbeat timeout - reconnecting");
-          this.webSocket?.close();
-          this.connectWebSocket();
-        }, this.HEARTBEAT_TIMEOUT);
-      }
-    }, this.HEARTBEAT_INTERVAL);
+    // For server-side requests, try to read impersonation from cookies
+    const impersonationUserId = await ImpersonationState.getServerSide();
+    const fakeRequest = impersonationUserId
+      ? new Request(url, {
+          headers: { "X-Act-As-User-Id": impersonationUserId },
+        })
+      : undefined;
+
+    return await makeAuthenticatedRequest(
+      method,
+      url,
+      payload,
+      "application/json",
+      fakeRequest,
+    );
   }
 
-  stopHeartbeat() {
-    if (this.heartbeatInterval) {
-      clearInterval(this.heartbeatInterval);
-      this.heartbeatInterval = null;
-    }
-    if (this.heartbeatTimeoutId) {
-      clearTimeout(this.heartbeatTimeoutId);
-      this.heartbeatTimeoutId = null;
-    }
-  }
+  ////////////////////////////////////////
+  ////////////// WEBSOCKETS //////////////
+  ////////////////////////////////////////
 
-  handleHeartbeatResponse() {
-    if (this.heartbeatTimeoutId) {
-      clearTimeout(this.heartbeatTimeoutId);
-      this.heartbeatTimeoutId = null;
-    }
-  }
-
-  async connectWebSocket(): Promise<void> {
-    this.wsConnecting ??= new Promise(async (resolve, reject) => {
-      try {
-        const token =
-          (await this.supabaseClient?.auth.getSession())?.data.session
-            ?.access_token || "";
-        const wsUrlWithToken = `${this.wsUrl}?token=${token}`;
-        this.webSocket = new WebSocket(wsUrlWithToken);
-
-        this.webSocket.onopen = () => {
-          this.startHeartbeat(); // Start heartbeat when connection opens
-          resolve();
-        };
-
-        this.webSocket.onclose = (event) => {
-          console.warn("WebSocket connection closed", event);
-          this.stopHeartbeat(); // Stop heartbeat when connection closes
-          this.webSocket = null;
-          // Attempt to reconnect after a delay
-          setTimeout(() => this.connectWebSocket(), 1000);
-        };
-
-        this.webSocket.onerror = (error) => {
-          console.error("WebSocket error:", error);
-          this.stopHeartbeat(); // Stop heartbeat on error
-          reject(error);
-        };
-
-        this.webSocket.onmessage = (event) => {
-          const message: WebsocketMessage = JSON.parse(event.data);
-
-          // Handle heartbeat response
-          if (message.method === "heartbeat" && message.data === "pong") {
-            this.handleHeartbeatResponse();
-            return;
-          }
-
-          if (message.method === "execution_event") {
-            message.data = parseNodeExecutionResultTimestamps(message.data);
-          }
-          this.wsMessageHandlers[message.method]?.forEach((handler) =>
-            handler(message.data),
-          );
-        };
-      } catch (error) {
-        console.error("Error connecting to WebSocket:", error);
-        reject(error);
-      }
+  subscribeToGraphExecution(graphExecID: GraphExecutionID): Promise<void> {
+    return this.sendWebSocketMessage("subscribe_graph_execution", {
+      graph_exec_id: graphExecID,
     });
-    return this.wsConnecting;
   }
 
-  disconnectWebSocket() {
-    this.stopHeartbeat(); // Stop heartbeat when disconnecting
-    if (this.webSocket && this.webSocket.readyState === WebSocket.OPEN) {
-      this.webSocket.close();
-    }
+  subscribeToGraphExecutions(graphID: GraphID): Promise<void> {
+    return this.sendWebSocketMessage("subscribe_graph_executions", {
+      graph_id: graphID,
+    });
   }
 
-  sendWebSocketMessage<M extends keyof WebsocketMessageTypeMap>(
+  async sendWebSocketMessage<M extends keyof WebsocketMessageTypeMap>(
     method: M,
     data: WebsocketMessageTypeMap[M],
     callCount = 0,
-  ) {
+    callCountLimit = 4,
+  ): Promise<void> {
     if (this.webSocket && this.webSocket.readyState === WebSocket.OPEN) {
       this.webSocket.send(JSON.stringify({ method, data }));
-    } else {
-      this.connectWebSocket().then(() => {
-        callCount == 0
-          ? this.sendWebSocketMessage(method, data, callCount + 1)
-          : setTimeout(
-              () => {
-                this.sendWebSocketMessage(method, data, callCount + 1);
-              },
-              2 ** (callCount - 1) * 1000,
-            );
-      });
+      return;
     }
+    if (callCount >= callCountLimit) {
+      throw new Error(
+        `WebSocket connection not open after ${callCountLimit} attempts`,
+      );
+    }
+    await this.connectWebSocket();
+    if (callCount === 0) {
+      return this.sendWebSocketMessage(method, data, callCount + 1);
+    }
+    const delayMs = 2 ** (callCount - 1) * 1000;
+    await new Promise((res) => setTimeout(res, delayMs));
+    return this.sendWebSocketMessage(method, data, callCount + 1);
   }
 
   onWebSocketMessage<M extends keyof WebsocketMessageTypeMap>(
@@ -901,23 +1010,248 @@ export default class BackendAPI {
     return () => this.wsMessageHandlers[method].delete(handler);
   }
 
-  subscribeToExecution(graphId: string, graphVersion: number) {
-    this.sendWebSocketMessage("subscribe", {
-      graph_id: graphId,
-      graph_version: graphVersion,
-    });
+  /**
+   * All handlers are invoked when the WebSocket (re)connects. If it's already connected
+   * when this function is called, the passed handler is invoked immediately.
+   *
+   * Use this hook to subscribe to topics and refresh state,
+   * to ensure re-subscription and re-sync on re-connect.
+   *
+   * @returns a detacher for the passed handler.
+   */
+  onWebSocketConnect(handler: () => void): () => void {
+    this.wsOnConnectHandlers.add(handler);
+
+    this.connectWebSocket();
+    if (this.webSocket?.readyState == WebSocket.OPEN) handler();
+
+    // Return detacher
+    return () => this.wsOnConnectHandlers.delete(handler);
+  }
+
+  /**
+   * All handlers are invoked when the WebSocket disconnects.
+   *
+   * @returns a detacher for the passed handler.
+   */
+  onWebSocketDisconnect(handler: () => void): () => void {
+    this.wsOnDisconnectHandlers.add(handler);
+
+    // Return detacher
+    return () => this.wsOnDisconnectHandlers.delete(handler);
+  }
+
+  async connectWebSocket(): Promise<void> {
+    // Do not attempt to connect if a disconnect intent is present (e.g., during logout)
+    if (this._hasDisconnectIntent()) {
+      return;
+    }
+
+    this.isIntentionallyDisconnected = false;
+    return (this.wsConnecting ??= new Promise(async (resolve, reject) => {
+      try {
+        let token = "";
+        try {
+          const { token: serverToken, error } = await getWebSocketToken();
+          if (serverToken && !error) {
+            token = serverToken;
+          } else if (error) {
+            console.warn("Failed to get WebSocket token from server:", error);
+          }
+        } catch (error) {
+          console.warn("Failed to get token for WebSocket connection:", error);
+          // Intentionally fall through; we'll bail out below if no token is available
+        }
+
+        // If we don't have a token, skip attempting a connection.
+        if (!token) {
+          console.info(
+            "[BackendAPI] Skipping WebSocket connect: no auth token available",
+          );
+          // Resolve first, then clear wsConnecting to avoid races for awaiters
+          resolve();
+          this.wsConnecting = null;
+          this.webSocket = null;
+          return;
+        }
+
+        const wsUrlWithToken = `${this.wsUrl}?token=${token}`;
+        this.webSocket = new WebSocket(wsUrlWithToken);
+        this.webSocket.state = "connecting";
+
+        this.webSocket.onopen = () => {
+          this.webSocket!.state = "connected";
+          console.info("[BackendAPI] WebSocket connected to", this.wsUrl);
+          this._startWSHeartbeat(); // Start heartbeat when connection opens
+          this._clearDisconnectIntent(); // Clear disconnect intent when connected
+          this.wsOnConnectHandlers.forEach((handler) => handler());
+          resolve();
+        };
+
+        this.webSocket.onclose = (event) => {
+          if (this.webSocket?.state == "connecting") {
+            console.error(
+              `[BackendAPI] WebSocket failed to connect: ${event.reason}`,
+              event,
+            );
+          } else if (this.webSocket?.state == "connected") {
+            console.warn(
+              `[BackendAPI] WebSocket connection closed: ${event.reason}`,
+              event,
+            );
+          }
+          this.webSocket!.state = "closed";
+
+          this._stopWSHeartbeat(); // Stop heartbeat when connection closes
+          this.wsConnecting = null;
+
+          const wasIntentional =
+            this.isIntentionallyDisconnected || this._hasDisconnectIntent();
+
+          if (!wasIntentional) {
+            this.wsOnDisconnectHandlers.forEach((handler) => handler());
+            setTimeout(() => this.connectWebSocket().then(resolve), 1000);
+          } else {
+            // Ensure pending connect calls settle on intentional close
+            resolve();
+          }
+        };
+
+        this.webSocket.onerror = (error) => {
+          if (this.webSocket?.state == "connected") {
+            console.error("[BackendAPI] WebSocket error:", error);
+          }
+        };
+        this.webSocket.onmessage = (event) => this._handleWSMessage(event);
+      } catch (error) {
+        console.error("[BackendAPI] Error connecting to WebSocket:", error);
+        reject(error);
+      }
+    }));
+  }
+
+  disconnectWebSocket() {
+    this.isIntentionallyDisconnected = true;
+    this._stopWSHeartbeat(); // Stop heartbeat when disconnecting
+    if (
+      this.webSocket &&
+      (this.webSocket.readyState === WebSocket.OPEN ||
+        this.webSocket.readyState === WebSocket.CONNECTING)
+    ) {
+      this.webSocket.close();
+    }
+    this.wsConnecting = null;
+  }
+
+  private _hasDisconnectIntent(): boolean {
+    if (!isClient) return false;
+
+    try {
+      return storage.get(Key.WEBSOCKET_DISCONNECT_INTENT) === "true";
+    } catch {
+      return false;
+    }
+  }
+
+  private _clearDisconnectIntent(): void {
+    if (!isClient) return;
+
+    try {
+      storage.clean(Key.WEBSOCKET_DISCONNECT_INTENT);
+    } catch {
+      Sentry.captureException(
+        new Error("Failed to clear WebSocket disconnect intent"),
+      );
+    }
+  }
+
+  private _handleWSMessage(event: MessageEvent): void {
+    const message: WebsocketMessage = JSON.parse(event.data);
+
+    // Handle heartbeat response
+    if (message.method === "heartbeat" && message.data === "pong") {
+      this._handleWSHeartbeatResponse();
+      return;
+    }
+
+    if (message.method === "node_execution_event") {
+      message.data = parseNodeExecutionResultTimestamps(message.data);
+    } else if (message.method == "graph_execution_event") {
+      message.data = parseGraphExecutionTimestamps(message.data);
+    }
+    this.wsMessageHandlers[message.method]?.forEach((handler) =>
+      handler(message.data),
+    );
+  }
+
+  private _startWSHeartbeat() {
+    this._stopWSHeartbeat();
+    this.heartbeatIntervalID = window.setInterval(() => {
+      if (this.webSocket?.readyState === WebSocket.OPEN) {
+        this.webSocket.send(
+          JSON.stringify({
+            method: "heartbeat",
+            data: "ping",
+            success: true,
+          }),
+        );
+
+        this.heartbeatTimeoutID = window.setTimeout(() => {
+          console.warn("Heartbeat timeout - reconnecting");
+          this.webSocket?.close();
+          this.connectWebSocket();
+        }, this.HEARTBEAT_TIMEOUT);
+      }
+    }, this.HEARTBEAT_INTERVAL);
+  }
+
+  private _stopWSHeartbeat() {
+    if (this.heartbeatIntervalID) {
+      clearInterval(this.heartbeatIntervalID);
+      this.heartbeatIntervalID = null;
+    }
+    if (this.heartbeatTimeoutID) {
+      clearTimeout(this.heartbeatTimeoutID);
+      this.heartbeatTimeoutID = null;
+    }
+  }
+
+  private _handleWSHeartbeatResponse() {
+    if (this.heartbeatTimeoutID) {
+      clearTimeout(this.heartbeatTimeoutID);
+      this.heartbeatTimeoutID = null;
+    }
+  }
+}
+
+declare global {
+  interface WebSocket {
+    state: "connecting" | "connected" | "closed";
   }
 }
 
 /* *** UTILITY TYPES *** */
 
+type GraphCreationSource = "builder" | "upload";
+type GraphExecutionSource = "builder" | "library" | "onboarding";
+
 type GraphCreateRequestBody = {
   graph: GraphCreatable;
+  source?: GraphCreationSource;
+};
+
+type GraphExecuteRequestBody = {
+  inputs: { [key: string]: any };
+  credentials_inputs: { [key: string]: CredentialsMetaInput };
+  source?: GraphExecutionSource;
 };
 
 type WebsocketMessageTypeMap = {
-  subscribe: { graph_id: string; graph_version: number };
-  execution_event: NodeExecutionResult;
+  subscribe_graph_execution: { graph_exec_id: GraphExecutionID };
+  subscribe_graph_executions: { graph_id: GraphID };
+  graph_execution_event: GraphExecution;
+  node_execution_event: NodeExecutionResult;
+  notification: WebSocketNotification;
   heartbeat: "ping" | "pong";
 };
 
@@ -937,19 +1271,39 @@ type _PydanticValidationError = {
 
 /* *** HELPER FUNCTIONS *** */
 
+function parseGraphExecutionTimestamps<
+  T extends GraphExecutionMeta | GraphExecution,
+>(result: any): T {
+  const fixed = _parseObjectTimestamps<T>(result, ["started_at", "ended_at"]);
+  if ("node_executions" in fixed && fixed.node_executions) {
+    fixed.node_executions = fixed.node_executions.map(
+      parseNodeExecutionResultTimestamps,
+    );
+  }
+  return fixed;
+}
+
 function parseNodeExecutionResultTimestamps(result: any): NodeExecutionResult {
-  return {
-    ...result,
-    add_time: new Date(result.add_time),
-    queue_time: result.queue_time ? new Date(result.queue_time) : undefined,
-    start_time: result.start_time ? new Date(result.start_time) : undefined,
-    end_time: result.end_time ? new Date(result.end_time) : undefined,
-  };
+  return _parseObjectTimestamps<NodeExecutionResult>(result, [
+    "add_time",
+    "queue_time",
+    "start_time",
+    "end_time",
+  ]);
 }
 
 function parseScheduleTimestamp(result: any): Schedule {
-  return {
-    ...result,
-    next_run_time: new Date(result.next_run_time),
-  };
+  return _parseObjectTimestamps<Schedule>(result, ["next_run_time"]);
+}
+
+function parseLibraryAgentPresetTimestamp(result: any): LibraryAgentPreset {
+  return _parseObjectTimestamps<LibraryAgentPreset>(result, ["updated_at"]);
+}
+
+function _parseObjectTimestamps<T>(obj: any, keys: (keyof T)[]): T {
+  const result = { ...obj };
+  keys.forEach(
+    (key) => (result[key] = result[key] ? new Date(result[key]) : undefined),
+  );
+  return result;
 }

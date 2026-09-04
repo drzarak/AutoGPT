@@ -1,17 +1,23 @@
 import codecs
 
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.data.model import SchemaField
 
 
 class TextDecoderBlock(Block):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         text: str = SchemaField(
             description="A string containing escaped characters to be decoded",
             placeholder='Your entire text block with \\n and \\" escaped characters',
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         decoded_text: str = SchemaField(
             description="The decoded text with escape sequences processed"
         )
@@ -34,6 +40,6 @@ This is a "quoted" string.""",
             ],
         )
 
-    def run(self, input_data: Input, **kwargs) -> BlockOutput:
+    async def run(self, input_data: Input, **kwargs) -> BlockOutput:
         decoded_text = codecs.decode(input_data.text, "unicode_escape")
         yield "decoded_text", decoded_text

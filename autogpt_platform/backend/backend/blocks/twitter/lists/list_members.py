@@ -3,9 +3,17 @@ from typing import cast
 import tweepy
 from tweepy.client import Response
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
@@ -28,7 +36,6 @@ from backend.blocks.twitter._types import (
     UserExpansionsFilter,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -37,7 +44,7 @@ class TwitterRemoveListMemberBlock(Block):
     Removes a member from a Twitter List that the authenticated user owns
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["list.write", "users.read", "tweet.read", "offline.access"]
         )
@@ -45,20 +52,17 @@ class TwitterRemoveListMemberBlock(Block):
         list_id: str = SchemaField(
             description="The ID of the List to remove the member from",
             placeholder="Enter list ID",
-            required=True,
         )
 
         user_id: str = SchemaField(
             description="The ID of the user to remove from the List",
             placeholder="Enter user ID to remove",
-            required=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(
             description="Whether the member was successfully removed"
         )
-        error: str = SchemaField(description="Error message if the removal failed")
 
     def __init__(self):
         super().__init__(
@@ -67,6 +71,7 @@ class TwitterRemoveListMemberBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterRemoveListMemberBlock.Input,
             output_schema=TwitterRemoveListMemberBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "list_id": "123456789",
                 "user_id": "987654321",
@@ -90,7 +95,7 @@ class TwitterRemoveListMemberBlock(Block):
         except Exception:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -112,7 +117,7 @@ class TwitterAddListMemberBlock(Block):
     Adds a member to a Twitter List that the authenticated user owns
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["list.write", "users.read", "tweet.read", "offline.access"]
         )
@@ -120,20 +125,17 @@ class TwitterAddListMemberBlock(Block):
         list_id: str = SchemaField(
             description="The ID of the List to add the member to",
             placeholder="Enter list ID",
-            required=True,
         )
 
         user_id: str = SchemaField(
             description="The ID of the user to add to the List",
             placeholder="Enter user ID to add",
-            required=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(
             description="Whether the member was successfully added"
         )
-        error: str = SchemaField(description="Error message if the addition failed")
 
     def __init__(self):
         super().__init__(
@@ -142,6 +144,7 @@ class TwitterAddListMemberBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterAddListMemberBlock.Input,
             output_schema=TwitterAddListMemberBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "list_id": "123456789",
                 "user_id": "987654321",
@@ -165,7 +168,7 @@ class TwitterAddListMemberBlock(Block):
         except Exception:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -195,7 +198,6 @@ class TwitterGetListMembersBlock(Block):
         list_id: str = SchemaField(
             description="The ID of the List to get members from",
             placeholder="Enter list ID",
-            required=True,
         )
 
         max_results: int | None = SchemaField(
@@ -212,7 +214,7 @@ class TwitterGetListMembersBlock(Block):
             advanced=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         ids: list[str] = SchemaField(description="List of member user IDs")
         usernames: list[str] = SchemaField(description="List of member usernames")
         next_token: str = SchemaField(description="Next token for pagination")
@@ -225,8 +227,6 @@ class TwitterGetListMembersBlock(Block):
         )
         meta: dict = SchemaField(description="Metadata including pagination info")
 
-        error: str = SchemaField(description="Error message if the request failed")
-
     def __init__(self):
         super().__init__(
             id="4dba046e-a62f-11ef-b69a-87240c84b4c7",
@@ -234,6 +234,7 @@ class TwitterGetListMembersBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetListMembersBlock.Input,
             output_schema=TwitterGetListMembersBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "list_id": "123456789",
                 "max_results": 2,
@@ -328,7 +329,7 @@ class TwitterGetListMembersBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -376,7 +377,6 @@ class TwitterGetListMembershipsBlock(Block):
         user_id: str = SchemaField(
             description="The ID of the user whose List memberships to retrieve",
             placeholder="Enter user ID",
-            required=True,
         )
 
         max_results: int | None = SchemaField(
@@ -393,7 +393,7 @@ class TwitterGetListMembershipsBlock(Block):
             default="",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         list_ids: list[str] = SchemaField(description="List of list IDs")
         next_token: str = SchemaField(description="Next token for pagination")
 
@@ -402,7 +402,6 @@ class TwitterGetListMembershipsBlock(Block):
             description="Additional data requested via expansions"
         )
         meta: dict = SchemaField(description="Metadata about pagination")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -411,6 +410,7 @@ class TwitterGetListMembershipsBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetListMembershipsBlock.Input,
             output_schema=TwitterGetListMembershipsBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "user_id": "123456789",
                 "max_results": 1,
@@ -494,7 +494,7 @@ class TwitterGetListMembershipsBlock(Block):
         except Exception:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

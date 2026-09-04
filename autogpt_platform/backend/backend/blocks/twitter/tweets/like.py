@@ -3,9 +3,17 @@ from typing import cast
 import tweepy
 from tweepy.client import Response
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
@@ -30,7 +38,6 @@ from backend.blocks.twitter._types import (
     UserExpansionsFilter,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -39,7 +46,7 @@ class TwitterLikeTweetBlock(Block):
     Likes a tweet
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["tweet.read", "like.write", "users.read", "offline.access"]
         )
@@ -49,9 +56,8 @@ class TwitterLikeTweetBlock(Block):
             placeholder="Enter tweet ID",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the operation was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -60,6 +66,7 @@ class TwitterLikeTweetBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterLikeTweetBlock.Input,
             output_schema=TwitterLikeTweetBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "tweet_id": "1234567890",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -88,7 +95,7 @@ class TwitterLikeTweetBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -132,7 +139,7 @@ class TwitterGetLikingUsersBlock(Block):
             advanced=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common Outputs that user commonly uses
         id: list[str] = SchemaField(description="All User IDs who liked the tweet")
         username: list[str] = SchemaField(
@@ -150,7 +157,6 @@ class TwitterGetLikingUsersBlock(Block):
         )
 
         # error
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -159,6 +165,7 @@ class TwitterGetLikingUsersBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetLikingUsersBlock.Input,
             output_schema=TwitterGetLikingUsersBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "tweet_id": "1234567890",
                 "max_results": 1,
@@ -246,7 +253,7 @@ class TwitterGetLikingUsersBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -306,7 +313,7 @@ class TwitterGetLikedTweetsBlock(Block):
             advanced=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common Outputs that user commonly uses
         ids: list[str] = SchemaField(description="All Tweet IDs")
         texts: list[str] = SchemaField(description="All Tweet texts")
@@ -328,7 +335,6 @@ class TwitterGetLikedTweetsBlock(Block):
         )
 
         # error
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -337,6 +343,7 @@ class TwitterGetLikedTweetsBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetLikedTweetsBlock.Input,
             output_schema=TwitterGetLikedTweetsBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "user_id": "1234567890",
                 "max_results": 2,
@@ -463,7 +470,7 @@ class TwitterGetLikedTweetsBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -510,7 +517,7 @@ class TwitterUnlikeTweetBlock(Block):
     Unlikes a tweet that was previously liked
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["tweet.read", "like.write", "users.read", "offline.access"]
         )
@@ -520,9 +527,8 @@ class TwitterUnlikeTweetBlock(Block):
             placeholder="Enter tweet ID",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the operation was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -531,6 +537,7 @@ class TwitterUnlikeTweetBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterUnlikeTweetBlock.Input,
             output_schema=TwitterUnlikeTweetBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "tweet_id": "1234567890",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -559,7 +566,7 @@ class TwitterUnlikeTweetBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

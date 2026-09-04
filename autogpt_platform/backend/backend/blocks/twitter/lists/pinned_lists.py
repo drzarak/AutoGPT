@@ -3,9 +3,17 @@ from typing import cast
 import tweepy
 from tweepy.client import Response
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
@@ -22,7 +30,6 @@ from backend.blocks.twitter._types import (
     TweetUserFieldsFilter,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -31,7 +38,7 @@ class TwitterUnpinListBlock(Block):
     Enables the authenticated user to unpin a List.
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["list.write", "users.read", "tweet.read", "offline.access"]
         )
@@ -39,12 +46,10 @@ class TwitterUnpinListBlock(Block):
         list_id: str = SchemaField(
             description="The ID of the List to unpin",
             placeholder="Enter list ID",
-            required=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the unpin was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -53,6 +58,7 @@ class TwitterUnpinListBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterUnpinListBlock.Input,
             output_schema=TwitterUnpinListBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={"list_id": "123456789", "credentials": TEST_CREDENTIALS_INPUT},
             test_credentials=TEST_CREDENTIALS,
             test_output=[("success", True)],
@@ -75,7 +81,7 @@ class TwitterUnpinListBlock(Block):
         except Exception:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -95,7 +101,7 @@ class TwitterPinListBlock(Block):
     Enables the authenticated user to pin a List.
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["list.write", "users.read", "tweet.read", "offline.access"]
         )
@@ -103,12 +109,10 @@ class TwitterPinListBlock(Block):
         list_id: str = SchemaField(
             description="The ID of the List to pin",
             placeholder="Enter list ID",
-            required=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the pin was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -117,6 +121,7 @@ class TwitterPinListBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterPinListBlock.Input,
             output_schema=TwitterPinListBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={"list_id": "123456789", "credentials": TEST_CREDENTIALS_INPUT},
             test_credentials=TEST_CREDENTIALS,
             test_output=[("success", True)],
@@ -139,7 +144,7 @@ class TwitterPinListBlock(Block):
         except Exception:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -164,7 +169,7 @@ class TwitterGetPinnedListsBlock(Block):
             ["lists.read", "users.read", "offline.access"]
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         list_ids: list[str] = SchemaField(description="List IDs of the pinned lists")
         list_names: list[str] = SchemaField(
             description="List names of the pinned lists"
@@ -177,7 +182,6 @@ class TwitterGetPinnedListsBlock(Block):
             description="Additional data requested via expansions"
         )
         meta: dict = SchemaField(description="Metadata about the response")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -186,6 +190,7 @@ class TwitterGetPinnedListsBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetPinnedListsBlock.Input,
             output_schema=TwitterGetPinnedListsBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "expansions": None,
                 "list_fields": None,
@@ -255,7 +260,7 @@ class TwitterGetPinnedListsBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

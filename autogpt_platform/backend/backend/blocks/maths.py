@@ -2,7 +2,13 @@ import operator
 from enum import Enum
 from typing import Any
 
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.data.model import SchemaField
 
 
@@ -15,7 +21,7 @@ class Operation(Enum):
 
 
 class CalculatorBlock(Block):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         operation: Operation = SchemaField(
             description="Choose the math operation you want to perform",
             placeholder="Select an operation",
@@ -31,7 +37,7 @@ class CalculatorBlock(Block):
             default=False,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         result: float = SchemaField(description="The result of your calculation")
 
     def __init__(self):
@@ -52,7 +58,7 @@ class CalculatorBlock(Block):
             ],
         )
 
-    def run(self, input_data: Input, **kwargs) -> BlockOutput:
+    async def run(self, input_data: Input, **kwargs) -> BlockOutput:
         operation = input_data.operation
         a = input_data.a
         b = input_data.b
@@ -85,13 +91,13 @@ class CalculatorBlock(Block):
 
 
 class CountItemsBlock(Block):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         collection: Any = SchemaField(
             description="Enter the collection you want to count. This can be a list, dictionary, string, or any other iterable.",
             placeholder="For example: [1, 2, 3] or {'a': 1, 'b': 2} or 'hello'",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         count: int = SchemaField(description="The number of items in the collection")
 
     def __init__(self):
@@ -107,7 +113,7 @@ class CountItemsBlock(Block):
             ],
         )
 
-    def run(self, input_data: Input, **kwargs) -> BlockOutput:
+    async def run(self, input_data: Input, **kwargs) -> BlockOutput:
         collection = input_data.collection
 
         try:

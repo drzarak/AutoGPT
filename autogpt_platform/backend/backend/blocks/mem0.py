@@ -3,7 +3,7 @@ from typing import Any, Literal, Optional, Union
 from mem0 import MemoryClient
 from pydantic import BaseModel, SecretStr
 
-from backend.data.block import Block, BlockOutput, BlockSchema
+from backend.blocks._base import Block, BlockOutput, BlockSchemaInput, BlockSchemaOutput
 from backend.data.model import (
     APIKeyCredentials,
     CredentialsField,
@@ -13,7 +13,7 @@ from backend.data.model import (
 from backend.integrations.providers import ProviderName
 
 TEST_CREDENTIALS = APIKeyCredentials(
-    id="ed55ac19-356e-4243-a6cb-bc599e9b716f",
+    id="8cc8b2c5-d3e4-4b1c-84ad-e1e9fe2a0122",
     provider="mem0",
     api_key=SecretStr("mock-mem0-api-key"),
     title="Mock Mem0 API key",
@@ -55,7 +55,7 @@ class AddMemoryBlock(Block, Mem0Base):
 
     Always limited by user_id and optional graph_id and graph_exec_id"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: CredentialsMetaInput[
             Literal[ProviderName.MEM0], Literal["api_key"]
         ] = CredentialsField(description="Mem0 API key credentials")
@@ -65,20 +65,21 @@ class AddMemoryBlock(Block, Mem0Base):
             default=Content(discriminator="content", content="I'm a vegetarian"),
         )
         metadata: dict[str, Any] = SchemaField(
-            description="Optional metadata for the memory", default={}
+            description="Optional metadata for the memory", default_factory=dict
         )
-
         limit_memory_to_run: bool = SchemaField(
             description="Limit the memory to the run", default=False
         )
         limit_memory_to_agent: bool = SchemaField(
-            description="Limit the memory to the agent", default=False
+            description="Limit the memory to the agent", default=True
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         action: str = SchemaField(description="Action of the operation")
         memory: str = SchemaField(description="Memory created")
-        error: str = SchemaField(description="Error message if operation fails")
+        results: list[dict[str, str]] = SchemaField(
+            description="List of all results from the operation"
+        )
 
     def __init__(self):
         super().__init__(
@@ -104,12 +105,19 @@ class AddMemoryBlock(Block, Mem0Base):
                     "credentials": TEST_CREDENTIALS_INPUT,
                 },
             ],
-            test_output=[("action", "NO_CHANGE"), ("action", "NO_CHANGE")],
+            test_output=[
+                ("results", [{"event": "CREATED", "memory": "test memory"}]),
+                ("action", "CREATED"),
+                ("memory", "test memory"),
+                ("results", [{"event": "CREATED", "memory": "test memory"}]),
+                ("action", "CREATED"),
+                ("memory", "test memory"),
+            ],
             test_credentials=TEST_CREDENTIALS,
             test_mock={"_get_client": lambda credentials: MockMemoryClient()},
         )
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -117,15 +125,17 @@ class AddMemoryBlock(Block, Mem0Base):
         user_id: str,
         graph_id: str,
         graph_exec_id: str,
-        **kwargs
+        **kwargs,
     ) -> BlockOutput:
         try:
             client = self._get_client(credentials)
 
             if isinstance(input_data.content, Conversation):
                 messages = input_data.content.messages
+            elif isinstance(input_data.content, Content):
+                messages = [{"role": "user", "content": input_data.content.content}]
             else:
-                messages = [{"role": "user", "content": input_data.content}]
+                messages = [{"role": "user", "content": str(input_data.content)}]
 
             params = {
                 "user_id": user_id,
@@ -144,21 +154,24 @@ class AddMemoryBlock(Block, Mem0Base):
                 **params,
             )
 
-            if len(result.get("results", [])) > 0:
-                for result in result.get("results", []):
+            results = result.get("results", [])
+            yield "results", results
+
+            if len(results) > 0:
+                for result in results:
                     yield "action", result["event"]
                     yield "memory", result["memory"]
             else:
                 yield "action", "NO_CHANGE"
 
         except Exception as e:
-            yield "error", str(object=e)
+            yield "error", str(e)
 
 
 class SearchMemoryBlock(Block, Mem0Base):
     """Block for searching memories in Mem0"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: CredentialsMetaInput[
             Literal[ProviderName.MEM0], Literal["api_key"]
         ] = CredentialsField(description="Mem0 API key credentials")
@@ -173,8 +186,12 @@ class SearchMemoryBlock(Block, Mem0Base):
         )
         categories_filter: list[str] = SchemaField(
             description="Categories to filter by",
-            default=[],
+            default_factory=list,
             advanced=True,
+        )
+        metadata_filter: Optional[dict[str, Any]] = SchemaField(
+            description="Optional metadata filters to apply",
+            default=None,
         )
         limit_memory_to_run: bool = SchemaField(
             description="Limit the memory to the run", default=False
@@ -183,9 +200,8 @@ class SearchMemoryBlock(Block, Mem0Base):
             description="Limit the memory to the agent", default=True
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         memories: Any = SchemaField(description="List of matching memories")
-        error: str = SchemaField(description="Error message if operation fails")
 
     def __init__(self):
         super().__init__(
@@ -206,7 +222,7 @@ class SearchMemoryBlock(Block, Mem0Base):
             test_mock={"_get_client": lambda credentials: MockMemoryClient()},
         )
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -214,7 +230,7 @@ class SearchMemoryBlock(Block, Mem0Base):
         user_id: str,
         graph_id: str,
         graph_exec_id: str,
-        **kwargs
+        **kwargs,
     ) -> BlockOutput:
         try:
             client = self._get_client(credentials)
@@ -233,6 +249,8 @@ class SearchMemoryBlock(Block, Mem0Base):
                 filters["AND"].append({"run_id": graph_exec_id})
             if input_data.limit_memory_to_agent:
                 filters["AND"].append({"agent_id": graph_id})
+            if input_data.metadata_filter:
+                filters["AND"].append({"metadata": input_data.metadata_filter})
 
             result: list[dict[str, Any]] = client.search(
                 input_data.query, version="v2", filters=filters
@@ -246,7 +264,7 @@ class SearchMemoryBlock(Block, Mem0Base):
 class GetAllMemoriesBlock(Block, Mem0Base):
     """Block for retrieving all memories from Mem0"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: CredentialsMetaInput[
             Literal[ProviderName.MEM0], Literal["api_key"]
         ] = CredentialsField(description="Mem0 API key credentials")
@@ -258,25 +276,28 @@ class GetAllMemoriesBlock(Block, Mem0Base):
         categories: Optional[list[str]] = SchemaField(
             description="Filter by categories", default=None
         )
+        metadata_filter: Optional[dict[str, Any]] = SchemaField(
+            description="Optional metadata filters to apply",
+            default=None,
+        )
         limit_memory_to_run: bool = SchemaField(
             description="Limit the memory to the run", default=False
         )
         limit_memory_to_agent: bool = SchemaField(
-            description="Limit the memory to the agent", default=False
+            description="Limit the memory to the agent", default=True
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         memories: Any = SchemaField(description="List of memories")
-        error: str = SchemaField(description="Error message if operation fails")
 
     def __init__(self):
         super().__init__(
             id="45aee5bf-4767-45d1-a28b-e01c5aae9fc1",
-            description="Retrieve all memories from Mem0 with pagination",
+            description="Retrieve all memories from Mem0 with optional conversation filtering",
             input_schema=GetAllMemoriesBlock.Input,
             output_schema=GetAllMemoriesBlock.Output,
             test_input={
-                "user_id": "test_user",
+                "metadata_filter": {"type": "test"},
                 "credentials": TEST_CREDENTIALS_INPUT,
             },
             test_output=[
@@ -286,7 +307,7 @@ class GetAllMemoriesBlock(Block, Mem0Base):
             test_mock={"_get_client": lambda credentials: MockMemoryClient()},
         )
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -294,7 +315,7 @@ class GetAllMemoriesBlock(Block, Mem0Base):
         user_id: str,
         graph_id: str,
         graph_exec_id: str,
-        **kwargs
+        **kwargs,
     ) -> BlockOutput:
         try:
             client = self._get_client(credentials)
@@ -312,6 +333,8 @@ class GetAllMemoriesBlock(Block, Mem0Base):
                 filters["AND"].append(
                     {"categories": {"contains": input_data.categories}}
                 )
+            if input_data.metadata_filter:
+                filters["AND"].append({"metadata": input_data.metadata_filter})
 
             memories: list[dict[str, Any]] = client.get_all(
                 filters=filters,
@@ -324,14 +347,115 @@ class GetAllMemoriesBlock(Block, Mem0Base):
             yield "error", str(e)
 
 
+class GetLatestMemoryBlock(Block, Mem0Base):
+    """Block for retrieving the latest memory from Mem0"""
+
+    class Input(BlockSchemaInput):
+        credentials: CredentialsMetaInput[
+            Literal[ProviderName.MEM0], Literal["api_key"]
+        ] = CredentialsField(description="Mem0 API key credentials")
+        trigger: bool = SchemaField(
+            description="An unused field that is used to trigger the block when you have no other inputs",
+            default=False,
+            advanced=False,
+        )
+        categories: Optional[list[str]] = SchemaField(
+            description="Filter by categories", default=None
+        )
+        conversation_id: Optional[str] = SchemaField(
+            description="Optional conversation ID to retrieve the latest memory from (uses run_id)",
+            default=None,
+        )
+        metadata_filter: Optional[dict[str, Any]] = SchemaField(
+            description="Optional metadata filters to apply",
+            default=None,
+        )
+        limit_memory_to_run: bool = SchemaField(
+            description="Limit the memory to the run", default=False
+        )
+        limit_memory_to_agent: bool = SchemaField(
+            description="Limit the memory to the agent", default=True
+        )
+
+    class Output(BlockSchemaOutput):
+        memory: Optional[dict[str, Any]] = SchemaField(
+            description="Latest memory if found"
+        )
+        found: bool = SchemaField(description="Whether a memory was found")
+
+    def __init__(self):
+        super().__init__(
+            id="0f9d81b5-a145-4c23-b87f-01d6bf37b677",
+            description="Retrieve the latest memory from Mem0 with optional key filtering",
+            input_schema=GetLatestMemoryBlock.Input,
+            output_schema=GetLatestMemoryBlock.Output,
+            test_input={
+                "metadata_filter": {"type": "test"},
+                "credentials": TEST_CREDENTIALS_INPUT,
+            },
+            test_output=[
+                ("memory", {"id": "test-memory", "content": "test content"}),
+                ("found", True),
+            ],
+            test_credentials=TEST_CREDENTIALS,
+            test_mock={"_get_client": lambda credentials: MockMemoryClient()},
+        )
+
+    async def run(
+        self,
+        input_data: Input,
+        *,
+        credentials: APIKeyCredentials,
+        user_id: str,
+        graph_id: str,
+        graph_exec_id: str,
+        **kwargs,
+    ) -> BlockOutput:
+        try:
+            client = self._get_client(credentials)
+
+            filters: Filter = {
+                "AND": [
+                    {"user_id": user_id},
+                ]
+            }
+            if input_data.limit_memory_to_run:
+                filters["AND"].append({"run_id": graph_exec_id})
+            if input_data.limit_memory_to_agent:
+                filters["AND"].append({"agent_id": graph_id})
+            if input_data.categories:
+                filters["AND"].append(
+                    {"categories": {"contains": input_data.categories}}
+                )
+            if input_data.metadata_filter:
+                filters["AND"].append({"metadata": input_data.metadata_filter})
+
+            memories: list[dict[str, Any]] = client.get_all(
+                filters=filters,
+                version="v2",
+            )
+
+            if memories:
+                # Return the latest memory (first in the list as they're sorted by recency)
+                latest_memory = memories[0]
+                yield "memory", latest_memory
+                yield "found", True
+            else:
+                yield "memory", None
+                yield "found", False
+
+        except Exception as e:
+            yield "error", str(e)
+
+
 # Mock client for testing
 class MockMemoryClient:
     """Mock Mem0 client for testing"""
 
     def add(self, *args, **kwargs):
-        return {"memory_id": "test-memory-id", "status": "success"}
+        return {"results": [{"event": "CREATED", "memory": "test memory"}]}
 
-    def search(self, *args, **kwargs) -> list[dict[str, str]]:
+    def search(self, *args, **kwargs) -> list[dict[str, Any]]:
         return [{"id": "test-memory", "content": "test content"}]
 
     def get_all(self, *args, **kwargs) -> list[dict[str, str]]:

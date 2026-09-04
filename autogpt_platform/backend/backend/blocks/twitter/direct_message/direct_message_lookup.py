@@ -1,11 +1,11 @@
-# Todo : Add new Type support
+# Todo : Add new Type support, and disable block if it's Oauth is not configured
 
 # from typing import cast
 # import tweepy
 # from tweepy.client import Response
 
+# from backend.blocks._base import Block, BlockCategory, BlockOutput, BlockSchema, BlockSchemaInput, BlockSchemaOutput
 # from backend.blocks.twitter._serializer import IncludesSerializer, ResponseDataSerializer
-# from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 # from backend.data.model import SchemaField
 # from backend.blocks.twitter._builders import DMExpansionsBuilder
 # from backend.blocks.twitter._types import DMEventExpansion, DMEventExpansionInputs, DMEventType, DMMediaField, DMTweetField, TweetUserFields
@@ -49,7 +49,7 @@
 #             default=""
 #         )
 
-#     class Output(BlockSchema):
+#     class Output(BlockSchemaOutput):
 #         # Common outputs
 #         event_ids: list[str] = SchemaField(description="DM Event IDs")
 #         event_texts: list[str] = SchemaField(description="DM Event text contents")
@@ -162,7 +162,7 @@
 #         except tweepy.TweepyException:
 #             raise
 
-#     def run(
+#     async def run(
 #         self,
 #         input_data: Input,
 #         *,

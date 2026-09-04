@@ -3,9 +3,11 @@ from typing import cast
 import tweepy
 from tweepy.client import Response
 
+from backend.blocks._base import Block, BlockCategory, BlockOutput, BlockSchemaOutput
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
@@ -22,7 +24,6 @@ from backend.blocks.twitter._types import (
     TweetUserFieldsFilter,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -39,10 +40,9 @@ class TwitterGetListBlock(Block):
         list_id: str = SchemaField(
             description="The ID of the List to lookup",
             placeholder="Enter list ID",
-            required=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common outputs
         id: str = SchemaField(description="ID of the Twitter List")
         name: str = SchemaField(description="Name of the Twitter List")
@@ -55,7 +55,6 @@ class TwitterGetListBlock(Block):
             description="Additional data requested via expansions"
         )
         meta: dict = SchemaField(description="Metadata about the response")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -64,6 +63,7 @@ class TwitterGetListBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetListBlock.Input,
             output_schema=TwitterGetListBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "list_id": "84839422",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -139,7 +139,7 @@ class TwitterGetListBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -184,7 +184,6 @@ class TwitterGetOwnedListsBlock(Block):
         user_id: str = SchemaField(
             description="The user ID whose owned Lists to retrieve",
             placeholder="Enter user ID",
-            required=True,
         )
 
         max_results: int | None = SchemaField(
@@ -201,7 +200,7 @@ class TwitterGetOwnedListsBlock(Block):
             default="",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common outputs
         list_ids: list[str] = SchemaField(description="List ids of the owned lists")
         list_names: list[str] = SchemaField(description="List names of the owned lists")
@@ -213,7 +212,6 @@ class TwitterGetOwnedListsBlock(Block):
             description="Additional data requested via expansions"
         )
         meta: dict = SchemaField(description="Metadata about the response")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -222,6 +220,7 @@ class TwitterGetOwnedListsBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetOwnedListsBlock.Input,
             output_schema=TwitterGetOwnedListsBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "user_id": "2244994945",
                 "max_results": 10,
@@ -311,7 +310,7 @@ class TwitterGetOwnedListsBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

@@ -1,11 +1,17 @@
 from enum import Enum
 from typing import Literal
 
-import replicate
 from pydantic import SecretStr
+from replicate.client import Client as ReplicateClient
 from replicate.helpers import FileOutput
 
-from backend.data.block import Block, BlockCategory, BlockSchema
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
+from backend.data.execution import ExecutionContext
 from backend.data.model import (
     APIKeyCredentials,
     CredentialsField,
@@ -13,6 +19,8 @@ from backend.data.model import (
     SchemaField,
 )
 from backend.integrations.providers import ProviderName
+from backend.util.file import store_media_file
+from backend.util.type import MediaFileType
 
 
 class ImageSize(str, Enum):
@@ -60,6 +68,14 @@ SIZE_TO_RECRAFT_DIMENSIONS = {
     ImageSize.TALL: "1024x1536",
 }
 
+SIZE_TO_NANO_BANANA_RATIO = {
+    ImageSize.SQUARE: "1:1",
+    ImageSize.LANDSCAPE: "4:3",
+    ImageSize.PORTRAIT: "3:4",
+    ImageSize.WIDE: "16:9",
+    ImageSize.TALL: "9:16",
+}
+
 
 class ImageStyle(str, Enum):
     """
@@ -98,10 +114,12 @@ class ImageGenModel(str, Enum):
     FLUX_ULTRA = "Flux 1.1 Pro Ultra"
     RECRAFT = "Recraft v3"
     SD3_5 = "Stable Diffusion 3.5 Medium"
+    NANO_BANANA_PRO = "Nano Banana Pro"
+    NANO_BANANA_2 = "Nano Banana 2"
 
 
 class AIImageGeneratorBlock(Block):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: CredentialsMetaInput[
             Literal[ProviderName.REPLICATE], Literal["api_key"]
         ] = CredentialsField(
@@ -114,7 +132,7 @@ class AIImageGeneratorBlock(Block):
         )
         model: ImageGenModel = SchemaField(
             description="The AI model to use for image generation",
-            default=ImageGenModel.SD3_5,
+            default=ImageGenModel.NANO_BANANA_2,
             title="Model",
         )
         size: ImageSize = SchemaField(
@@ -135,9 +153,8 @@ class AIImageGeneratorBlock(Block):
             title="Image Style",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         image_url: str = SchemaField(description="URL of the generated image")
-        error: str = SchemaField(description="Error message if generation failed")
 
     def __init__(self):
         super().__init__(
@@ -149,7 +166,7 @@ class AIImageGeneratorBlock(Block):
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "prompt": "An octopus using a laptop in a snowy forest with 'AutoGPT' clearly visible on the screen",
-                "model": ImageGenModel.RECRAFT,
+                "model": ImageGenModel.NANO_BANANA_2,
                 "size": ImageSize.SQUARE,
                 "style": ImageStyle.REALISTIC,
             },
@@ -157,23 +174,27 @@ class AIImageGeneratorBlock(Block):
             test_output=[
                 (
                     "image_url",
-                    "https://replicate.delivery/generated-image.webp",
+                    # Test output is a data URI since we now store images
+                    lambda x: x.startswith("data:image/"),
                 ),
             ],
             test_mock={
-                "_run_client": lambda *args, **kwargs: "https://replicate.delivery/generated-image.webp"
+                # Return a data URI directly so store_media_file doesn't need to download
+                "_run_client": lambda *args, **kwargs: (
+                    "data:image/webp;base64,UklGRiQAAABXRUJQVlA4IBgAAAAwAQCdASoBAAEAAQAcJYgCdAEO"
+                )
             },
         )
 
-    def _run_client(
+    async def _run_client(
         self, credentials: APIKeyCredentials, model_name: str, input_params: dict
     ):
         try:
             # Initialize Replicate client
-            client = replicate.Client(api_token=credentials.api_key.get_secret_value())
+            client = ReplicateClient(api_token=credentials.api_key.get_secret_value())
 
             # Run the model with input parameters
-            output = client.run(model_name, input=input_params, wait=False)
+            output = await client.async_run(model_name, input=input_params, wait=False)
 
             # Process output
             if isinstance(output, list) and len(output) > 0:
@@ -195,7 +216,7 @@ class AIImageGeneratorBlock(Block):
         except Exception as e:
             raise RuntimeError(f"Unexpected error during model execution: {e}")
 
-    def generate_image(self, input_data: Input, credentials: APIKeyCredentials):
+    async def generate_image(self, input_data: Input, credentials: APIKeyCredentials):
         try:
             # Handle style-based prompt modification for models without native style support
             modified_prompt = input_data.prompt
@@ -213,7 +234,7 @@ class AIImageGeneratorBlock(Block):
                     "steps": 40,
                     "cfg_scale": 7.0,
                 }
-                output = self._run_client(
+                output = await self._run_client(
                     credentials,
                     "stability-ai/stable-diffusion-3.5-medium",
                     input_params,
@@ -231,7 +252,7 @@ class AIImageGeneratorBlock(Block):
                     "output_format": "jpg",  # Set to jpg for Flux models
                     "output_quality": 90,
                 }
-                output = self._run_client(
+                output = await self._run_client(
                     credentials, "black-forest-labs/flux-1.1-pro", input_params
                 )
                 return output
@@ -246,7 +267,7 @@ class AIImageGeneratorBlock(Block):
                     "output_format": "jpg",
                     "output_quality": 90,
                 }
-                output = self._run_client(
+                output = await self._run_client(
                     credentials, "black-forest-labs/flux-1.1-pro-ultra", input_params
                 )
                 return output
@@ -257,8 +278,29 @@ class AIImageGeneratorBlock(Block):
                     "size": SIZE_TO_RECRAFT_DIMENSIONS[input_data.size],
                     "style": input_data.style.value,
                 }
-                output = self._run_client(
+                output = await self._run_client(
                     credentials, "recraft-ai/recraft-v3", input_params
+                )
+                return output
+
+            elif input_data.model in (
+                ImageGenModel.NANO_BANANA_PRO,
+                ImageGenModel.NANO_BANANA_2,
+            ):
+                # Use Nano Banana models (Google Gemini image variants)
+                model_map = {
+                    ImageGenModel.NANO_BANANA_PRO: "google/nano-banana-pro",
+                    ImageGenModel.NANO_BANANA_2: "google/nano-banana-2",
+                }
+                input_params = {
+                    "prompt": modified_prompt,
+                    "aspect_ratio": SIZE_TO_NANO_BANANA_RATIO[input_data.size],
+                    "resolution": "2K",
+                    "output_format": "jpg",
+                    "safety_filter_level": "block_only_high",
+                }
+                output = await self._run_client(
+                    credentials, model_map[input_data.model], input_params
                 )
                 return output
 
@@ -296,11 +338,24 @@ class AIImageGeneratorBlock(Block):
         style_text = style_map.get(style, "")
         return f"{style_text} of" if style_text else ""
 
-    def run(self, input_data: Input, *, credentials: APIKeyCredentials, **kwargs):
+    async def run(
+        self,
+        input_data: Input,
+        *,
+        credentials: APIKeyCredentials,
+        execution_context: ExecutionContext,
+        **kwargs,
+    ):
         try:
-            url = self.generate_image(input_data, credentials)
+            url = await self.generate_image(input_data, credentials)
             if url:
-                yield "image_url", url
+                # Store the generated image to the user's workspace/execution folder
+                stored_url = await store_media_file(
+                    file=MediaFileType(url),
+                    execution_context=execution_context,
+                    return_format="for_block_output",
+                )
+                yield "image_url", stored_url
             else:
                 yield "error", "Image generation returned an empty result."
         except Exception as e:

@@ -1,11 +1,11 @@
-# Todo : Add new Type support
+# Todo : Add new Type support, and disable block if it's Oauth is not configured
 
 # from typing import cast
 
 # import tweepy
 # from tweepy.client import Response
 
-# from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
+# from backend.blocks._base import Block, BlockCategory, BlockOutput, BlockSchema, BlockSchemaInput, BlockSchemaOutput
 # from backend.data.model import SchemaField
 # from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
 # from backend.blocks.twitter._auth import (
@@ -22,7 +22,7 @@
 #     Sends a direct message to a Twitter user
 #     """
 
-#     class Input(BlockSchema):
+#     class Input(BlockSchemaInput):
 #         credentials: TwitterCredentialsInput = TwitterCredentialsField(
 #             ["offline.access", "direct_messages.write"]
 #         )
@@ -54,7 +54,7 @@
 #             default=""
 #         )
 
-#     class Output(BlockSchema):
+#     class Output(BlockSchemaOutput):
 #         dm_event_id: str = SchemaField(description="ID of the sent direct message")
 #         dm_conversation_id_: str = SchemaField(description="ID of the conversation")
 #         error: str = SchemaField(description="Error message if sending failed")
@@ -122,7 +122,7 @@
 #             print(f"Unexpected error: {str(e)}")
 #             raise
 
-#     def run(
+#     async def run(
 #         self,
 #         input_data: Input,
 #         *,
@@ -148,7 +148,7 @@
 #     Creates a new group direct message conversation on Twitter
 #     """
 
-#     class Input(BlockSchema):
+#     class Input(BlockSchemaInput):
 #         credentials: TwitterCredentialsInput = TwitterCredentialsField(
 #             ["offline.access", "dm.write","dm.read","tweet.read","user.read"]
 #         )
@@ -156,7 +156,7 @@
 #         participant_ids: list[str] = SchemaField(
 #             description="Array of User IDs to create conversation with (max 50)",
 #             placeholder="Enter participant user IDs",
-#             default=[],
+#             default_factory=list,
 #             advanced=False
 #         )
 
@@ -174,7 +174,7 @@
 #             advanced=False
 #         )
 
-#     class Output(BlockSchema):
+#     class Output(BlockSchemaOutput):
 #         dm_event_id: str = SchemaField(description="ID of the sent direct message")
 #         dm_conversation_id: str = SchemaField(description="ID of the conversation")
 #         error: str = SchemaField(description="Error message if sending failed")
@@ -239,7 +239,7 @@
 #             print(f"Unexpected error: {str(e)}")
 #             raise
 
-#     def run(
+#     async def run(
 #         self,
 #         input_data: Input,
 #         *,

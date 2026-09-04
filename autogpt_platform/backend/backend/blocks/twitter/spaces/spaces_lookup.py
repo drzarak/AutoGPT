@@ -4,9 +4,11 @@ import tweepy
 from pydantic import BaseModel
 from tweepy.client import Response
 
+from backend.blocks._base import Block, BlockCategory, BlockOutput, BlockSchemaOutput
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
@@ -35,7 +37,6 @@ from backend.blocks.twitter._types import (
     UserExpansionsFilter,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -44,7 +45,7 @@ class SpaceList(BaseModel):
     space_ids: list[str] = SchemaField(
         description="List of Space IDs to lookup (up to 100)",
         placeholder="Enter Space IDs",
-        default=[],
+        default_factory=list,
         advanced=False,
     )
 
@@ -54,7 +55,7 @@ class UserList(BaseModel):
     user_ids: list[str] = SchemaField(
         description="List of user IDs to lookup their Spaces (up to 100)",
         placeholder="Enter user IDs",
-        default=[],
+        default_factory=list,
         advanced=False,
     )
 
@@ -75,7 +76,7 @@ class TwitterGetSpacesBlock(Block):
             advanced=False,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common outputs
         ids: list[str] = SchemaField(description="List of space IDs")
         titles: list[str] = SchemaField(description="List of space titles")
@@ -85,7 +86,6 @@ class TwitterGetSpacesBlock(Block):
         includes: dict = SchemaField(
             description="Additional data requested via expansions"
         )
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -94,6 +94,7 @@ class TwitterGetSpacesBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetSpacesBlock.Input,
             output_schema=TwitterGetSpacesBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "identifier": {
                     "discriminator": "space_list",
@@ -184,7 +185,7 @@ class TwitterGetSpacesBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -227,10 +228,9 @@ class TwitterGetSpaceByIdBlock(Block):
         space_id: str = SchemaField(
             description="Space ID to lookup",
             placeholder="Enter Space ID",
-            required=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common outputs
         id: str = SchemaField(description="Space ID")
         title: str = SchemaField(description="Space title")
@@ -241,7 +241,6 @@ class TwitterGetSpaceByIdBlock(Block):
         includes: dict = SchemaField(
             description="Additional data requested via expansions"
         )
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -250,6 +249,7 @@ class TwitterGetSpaceByIdBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetSpaceByIdBlock.Input,
             output_schema=TwitterGetSpaceByIdBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "space_id": "1DXxyRYNejbKM",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -339,7 +339,7 @@ class TwitterGetSpaceByIdBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -389,10 +389,9 @@ class TwitterGetSpaceBuyersBlock(Block):
         space_id: str = SchemaField(
             description="Space ID to lookup buyers for",
             placeholder="Enter Space ID",
-            required=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common outputs
         buyer_ids: list[str] = SchemaField(description="List of buyer IDs")
         usernames: list[str] = SchemaField(description="List of buyer usernames")
@@ -402,7 +401,6 @@ class TwitterGetSpaceBuyersBlock(Block):
         includes: dict = SchemaField(
             description="Additional data requested via expansions"
         )
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -411,6 +409,7 @@ class TwitterGetSpaceBuyersBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetSpaceBuyersBlock.Input,
             output_schema=TwitterGetSpaceBuyersBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "space_id": "1DXxyRYNejbKM",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -475,7 +474,7 @@ class TwitterGetSpaceBuyersBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -517,10 +516,9 @@ class TwitterGetSpaceTweetsBlock(Block):
         space_id: str = SchemaField(
             description="Space ID to lookup tweets for",
             placeholder="Enter Space ID",
-            required=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common outputs
         tweet_ids: list[str] = SchemaField(description="List of tweet IDs")
         texts: list[str] = SchemaField(description="List of tweet texts")
@@ -531,7 +529,6 @@ class TwitterGetSpaceTweetsBlock(Block):
             description="Additional data requested via expansions"
         )
         meta: dict = SchemaField(description="Response metadata")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -540,6 +537,7 @@ class TwitterGetSpaceTweetsBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetSpaceTweetsBlock.Input,
             output_schema=TwitterGetSpaceTweetsBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "space_id": "1DXxyRYNejbKM",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -616,7 +614,7 @@ class TwitterGetSpaceTweetsBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

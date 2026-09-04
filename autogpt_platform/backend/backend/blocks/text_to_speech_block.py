@@ -2,15 +2,22 @@ from typing import Any, Literal
 
 from pydantic import SecretStr
 
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.data.model import (
     APIKeyCredentials,
     CredentialsField,
     CredentialsMetaInput,
+    NodeExecutionStats,
     SchemaField,
 )
 from backend.integrations.providers import ProviderName
-from backend.util.request import requests
+from backend.util.request import Requests
 
 TEST_CREDENTIALS = APIKeyCredentials(
     id="01234567-89ab-cdef-0123-456789abcdef",
@@ -28,7 +35,7 @@ TEST_CREDENTIALS_INPUT = {
 
 
 class UnrealTextToSpeechBlock(Block):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         text: str = SchemaField(
             description="The text to be converted to speech",
             placeholder="Enter the text you want to convert to speech",
@@ -45,9 +52,8 @@ class UnrealTextToSpeechBlock(Block):
             "any API key with sufficient permissions for the blocks it is used on.",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         mp3_url: str = SchemaField(description="The URL of the generated MP3 file")
-        error: str = SchemaField(description="Error message if the API call failed")
 
     def __init__(self):
         super().__init__(
@@ -71,7 +77,7 @@ class UnrealTextToSpeechBlock(Block):
         )
 
     @staticmethod
-    def call_unreal_speech_api(
+    async def call_unreal_speech_api(
         api_key: SecretStr, text: str, voice_id: str
     ) -> dict[str, Any]:
         url = "https://api.v7.unrealspeech.com/speech"
@@ -88,15 +94,24 @@ class UnrealTextToSpeechBlock(Block):
             "TimestampType": "sentence",
         }
 
-        response = requests.post(url, headers=headers, json=data)
+        response = await Requests().post(url, headers=headers, json=data)
         return response.json()
 
-    def run(
+    async def run(
         self, input_data: Input, *, credentials: APIKeyCredentials, **kwargs
     ) -> BlockOutput:
-        api_response = self.call_unreal_speech_api(
+        api_response = await self.call_unreal_speech_api(
             credentials.api_key,
             input_data.text,
             input_data.voice_id,
+        )
+        # Unreal Speech: $16 / 1M chars = $0.000016/char. Emit USD so the
+        # COST_USD resolver (150 cr/$ via BLOCK_COSTS) bills proportionally
+        # instead of the old flat 5 cr.
+        self.merge_stats(
+            NodeExecutionStats(
+                provider_cost=len(input_data.text) * 0.000016,
+                provider_cost_type="cost_usd",
+            )
         )
         yield "mp3_url", api_response["OutputUri"]

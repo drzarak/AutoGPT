@@ -4,7 +4,14 @@ from typing import Literal
 
 from pydantic import SecretStr
 
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
+from backend.data.execution import ExecutionContext
 from backend.data.model import (
     APIKeyCredentials,
     CredentialsField,
@@ -12,7 +19,7 @@ from backend.data.model import (
     SchemaField,
 )
 from backend.integrations.providers import ProviderName
-from backend.util.file import MediaFile, store_media_file
+from backend.util.file import MediaFileType, store_media_file
 from backend.util.request import Requests
 
 
@@ -25,7 +32,7 @@ class Format(str, Enum):
 class ScreenshotWebPageBlock(Block):
     """Block for taking screenshots using ScreenshotOne API"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: CredentialsMetaInput[
             Literal[ProviderName.SCREENSHOTONE], Literal["api_key"]
         ] = CredentialsField(description="The ScreenshotOne API key")
@@ -56,9 +63,8 @@ class ScreenshotWebPageBlock(Block):
             description="Whether to enable caching", default=False
         )
 
-    class Output(BlockSchema):
-        image: MediaFile = SchemaField(description="The screenshot image data")
-        error: str = SchemaField(description="Error message if the screenshot failed")
+    class Output(BlockSchemaOutput):
+        image: MediaFileType = SchemaField(description="The screenshot image data")
 
     def __init__(self):
         super().__init__(
@@ -105,9 +111,9 @@ class ScreenshotWebPageBlock(Block):
         )
 
     @staticmethod
-    def take_screenshot(
+    async def take_screenshot(
         credentials: APIKeyCredentials,
-        graph_exec_id: str,
+        execution_context: ExecutionContext,
         url: str,
         viewport_width: int,
         viewport_height: int,
@@ -121,11 +127,10 @@ class ScreenshotWebPageBlock(Block):
         """
         Takes a screenshot using the ScreenshotOne API
         """
-        api = Requests(trusted_origins=["https://api.screenshotone.com"])
+        api = Requests()
 
-        # Build API URL with parameters
+        # Build API parameters
         params = {
-            "access_key": credentials.api_key.get_secret_value(),
             "url": url,
             "viewport_width": viewport_width,
             "viewport_height": viewport_height,
@@ -137,28 +142,39 @@ class ScreenshotWebPageBlock(Block):
             "cache": str(cache).lower(),
         }
 
-        response = api.get("https://api.screenshotone.com/take", params=params)
+        # Make the API request
+        # Use header-based authentication instead of query parameter
+        headers = {
+            "X-Access-Key": credentials.api_key.get_secret_value(),
+        }
+
+        response = await api.get(
+            "https://api.screenshotone.com/take", params=params, headers=headers
+        )
+        content = response.content
 
         return {
-            "image": store_media_file(
-                graph_exec_id=graph_exec_id,
-                file=f"data:image/{format.value};base64,{b64encode(response.content).decode('utf-8')}",
-                return_content=True,
+            "image": await store_media_file(
+                file=MediaFileType(
+                    f"data:image/{format.value};base64,{b64encode(content).decode('utf-8')}"
+                ),
+                execution_context=execution_context,
+                return_format="for_block_output",
             )
         }
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
         credentials: APIKeyCredentials,
-        graph_exec_id: str,
+        execution_context: ExecutionContext,
         **kwargs,
     ) -> BlockOutput:
         try:
-            screenshot_data = self.take_screenshot(
+            screenshot_data = await self.take_screenshot(
                 credentials=credentials,
-                graph_exec_id=graph_exec_id,
+                execution_context=execution_context,
                 url=input_data.url,
                 viewport_width=input_data.viewport_width,
                 viewport_height=input_data.viewport_height,

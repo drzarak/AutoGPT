@@ -1,16 +1,22 @@
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.data.model import SchemaField
 
 
 class WordCharacterCountBlock(Block):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         text: str = SchemaField(
             description="Input text to count words and characters",
             placeholder="Enter your text here",
             advanced=False,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         word_count: int = SchemaField(description="Number of words in the input text")
         character_count: int = SchemaField(
             description="Number of characters in the input text"
@@ -30,7 +36,7 @@ class WordCharacterCountBlock(Block):
             test_output=[("word_count", 4), ("character_count", 19)],
         )
 
-    def run(self, input_data: Input, **kwargs) -> BlockOutput:
+    async def run(self, input_data: Input, **kwargs) -> BlockOutput:
         try:
             text = input_data.text
             word_count = len(text.split())

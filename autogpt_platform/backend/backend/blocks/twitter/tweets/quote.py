@@ -3,9 +3,11 @@ from typing import cast
 import tweepy
 from tweepy.client import Response
 
+from backend.blocks._base import Block, BlockCategory, BlockOutput, BlockSchemaOutput
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
@@ -26,7 +28,6 @@ from backend.blocks.twitter._types import (
     TweetUserFieldsFilter,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -61,7 +62,7 @@ class TwitterGetQuoteTweetsBlock(Block):
             default="",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common Outputs that user commonly uses
         ids: list = SchemaField(description="All Tweet IDs ")
         texts: list = SchemaField(description="All Tweet texts")
@@ -77,7 +78,6 @@ class TwitterGetQuoteTweetsBlock(Block):
         )
 
         # error
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -86,6 +86,7 @@ class TwitterGetQuoteTweetsBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetQuoteTweetsBlock.Input,
             output_schema=TwitterGetQuoteTweetsBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "tweet_id": "1234567890",
                 "max_results": 2,
@@ -184,7 +185,7 @@ class TwitterGetQuoteTweetsBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

@@ -1,15 +1,16 @@
 from pydantic import BaseModel
 
-from backend.data.block import (
+from backend.blocks._base import (
     Block,
     BlockCategory,
     BlockOutput,
-    BlockSchema,
+    BlockSchemaInput,
+    BlockSchemaOutput,
     BlockWebhookConfig,
 )
 from backend.data.model import SchemaField
-from backend.util import settings
-from backend.util.settings import AppEnvironment, BehaveAs
+from backend.integrations.providers import ProviderName
+from backend.util.settings import AppEnvironment, BehaveAs, Settings
 
 from ._api import (
     TEST_CREDENTIALS,
@@ -18,16 +19,18 @@ from ._api import (
     Slant3DCredentialsInput,
 )
 
+settings = Settings()
+
 
 class Slant3DTriggerBase:
     """Base class for Slant3D webhook triggers"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: Slant3DCredentialsInput = Slant3DCredentialsField()
         # Webhook URL is handled by the webhook system
-        payload: dict = SchemaField(hidden=True, default={})
+        payload: dict = SchemaField(hidden=True, default_factory=dict)
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         payload: dict = SchemaField(
             description="The complete webhook payload received from Slant3D"
         )
@@ -36,7 +39,7 @@ class Slant3DTriggerBase:
             description="Error message if payload processing failed"
         )
 
-    def run(self, input_data: Input, **kwargs) -> BlockOutput:
+    async def run(self, input_data: Input, **kwargs) -> BlockOutput:
         yield "payload", input_data.payload
         yield "order_id", input_data.payload["orderId"]
 
@@ -75,14 +78,14 @@ class Slant3DOrderWebhookBlock(Slant3DTriggerBase, Block):
             ),
             # All webhooks are currently subscribed to for all orders. This works for self hosted, but not for cloud hosted prod
             disabled=(
-                settings.Settings().config.behave_as == BehaveAs.CLOUD
-                and settings.Settings().config.app_env != AppEnvironment.LOCAL
+                settings.config.behave_as == BehaveAs.CLOUD
+                and settings.config.app_env != AppEnvironment.LOCAL
             ),
             categories={BlockCategory.DEVELOPER_TOOLS},
             input_schema=self.Input,
             output_schema=self.Output,
             webhook_config=BlockWebhookConfig(
-                provider="slant3d",
+                provider=ProviderName.SLANT3D,
                 webhook_type="orders",  # Only one type for now
                 resource_format="",  # No resource format needed
                 event_filter_input="events",
@@ -116,8 +119,9 @@ class Slant3DOrderWebhookBlock(Slant3DTriggerBase, Block):
             ],
         )
 
-    def run(self, input_data: Input, **kwargs) -> BlockOutput:  # type: ignore
-        yield from super().run(input_data, **kwargs)
+    async def run(self, input_data: Input, **kwargs) -> BlockOutput:  # type: ignore
+        async for name, value in super().run(input_data, **kwargs):
+            yield name, value
 
         # Extract and normalize values from the payload
         yield "status", input_data.payload["status"]

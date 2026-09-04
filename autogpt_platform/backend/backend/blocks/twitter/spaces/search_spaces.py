@@ -3,9 +3,11 @@ from typing import cast
 import tweepy
 from tweepy.client import Response
 
+from backend.blocks._base import Block, BlockCategory, BlockOutput, BlockSchemaOutput
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
@@ -23,7 +25,6 @@ from backend.blocks.twitter._types import (
     TweetUserFieldsFilter,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -55,7 +56,7 @@ class TwitterSearchSpacesBlock(Block):
             default=SpaceStatesFilter.all,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common outputs that user commonly uses
         ids: list[str] = SchemaField(description="List of space IDs")
         titles: list[str] = SchemaField(description="List of space titles")
@@ -69,8 +70,6 @@ class TwitterSearchSpacesBlock(Block):
         )
         meta: dict = SchemaField(description="Metadata including pagination info")
 
-        error: str = SchemaField(description="Error message if the request failed")
-
     def __init__(self):
         super().__init__(
             id="aaefdd48-a62f-11ef-a73c-3f44df63e276",
@@ -78,6 +77,7 @@ class TwitterSearchSpacesBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterSearchSpacesBlock.Input,
             output_schema=TwitterSearchSpacesBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "query": "tech",
                 "max_results": 1,
@@ -156,7 +156,7 @@ class TwitterSearchSpacesBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

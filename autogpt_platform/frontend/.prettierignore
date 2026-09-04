@@ -1,4 +1,8 @@
 node_modules
+pnpm-lock.yaml
 .next
-build
+.auth
 public
+Dockerfile
+.prettierignore
+.env*

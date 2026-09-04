@@ -3,9 +3,17 @@ from typing import cast
 import tweepy
 from tweepy.client import Response
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
@@ -22,7 +30,6 @@ from backend.blocks.twitter._types import (
     UserExpansionsFilter,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -32,7 +39,7 @@ class TwitterUnfollowUserBlock(Block):
     The request succeeds with no action when the authenticated user sends a request to a user they're not following or have already unfollowed.
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["users.read", "users.write", "follows.write", "offline.access"]
         )
@@ -42,11 +49,10 @@ class TwitterUnfollowUserBlock(Block):
             placeholder="Enter target user ID",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(
             description="Whether the unfollow action was successful"
         )
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -55,6 +61,7 @@ class TwitterUnfollowUserBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterUnfollowUserBlock.Input,
             output_schema=TwitterUnfollowUserBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "target_user_id": "12345",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -80,7 +87,7 @@ class TwitterUnfollowUserBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -103,7 +110,7 @@ class TwitterFollowUserBlock(Block):
     public Tweets.
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["users.read", "users.write", "follows.write", "offline.access"]
         )
@@ -113,11 +120,10 @@ class TwitterFollowUserBlock(Block):
             placeholder="Enter target user ID",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(
             description="Whether the follow action was successful"
         )
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -126,6 +132,7 @@ class TwitterFollowUserBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterFollowUserBlock.Input,
             output_schema=TwitterFollowUserBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "target_user_id": "12345",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -149,7 +156,7 @@ class TwitterFollowUserBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -193,7 +200,7 @@ class TwitterGetFollowersBlock(Block):
             advanced=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         ids: list[str] = SchemaField(description="List of follower user IDs")
         usernames: list[str] = SchemaField(description="List of follower usernames")
         next_token: str = SchemaField(description="Next token for pagination")
@@ -204,8 +211,6 @@ class TwitterGetFollowersBlock(Block):
         )
         meta: dict = SchemaField(description="Metadata including pagination info")
 
-        error: str = SchemaField(description="Error message if the request failed")
-
     def __init__(self):
         super().__init__(
             id="30f66410-a631-11ef-8fe7-d7f888b4f43c",
@@ -213,6 +218,7 @@ class TwitterGetFollowersBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetFollowersBlock.Input,
             output_schema=TwitterGetFollowersBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "target_user_id": "12345",
                 "max_results": 1,
@@ -304,7 +310,7 @@ class TwitterGetFollowersBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -366,7 +372,7 @@ class TwitterGetFollowingBlock(Block):
             advanced=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         ids: list[str] = SchemaField(description="List of following user IDs")
         usernames: list[str] = SchemaField(description="List of following usernames")
         next_token: str = SchemaField(description="Next token for pagination")
@@ -377,8 +383,6 @@ class TwitterGetFollowingBlock(Block):
         )
         meta: dict = SchemaField(description="Metadata including pagination info")
 
-        error: str = SchemaField(description="Error message if the request failed")
-
     def __init__(self):
         super().__init__(
             id="264a399c-a631-11ef-a97d-bfde4ca91173",
@@ -386,6 +390,7 @@ class TwitterGetFollowingBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetFollowingBlock.Input,
             output_schema=TwitterGetFollowingBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "target_user_id": "12345",
                 "max_results": 1,
@@ -477,7 +482,7 @@ class TwitterGetFollowingBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

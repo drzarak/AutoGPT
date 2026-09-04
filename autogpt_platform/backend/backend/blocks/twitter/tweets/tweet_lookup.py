@@ -3,9 +3,11 @@ from typing import cast
 import tweepy
 from tweepy.client import Response
 
+from backend.blocks._base import Block, BlockCategory, BlockOutput, BlockSchemaOutput
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
@@ -25,7 +27,6 @@ from backend.blocks.twitter._types import (
     TweetUserFieldsFilter,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -44,7 +45,7 @@ class TwitterGetTweetBlock(Block):
             placeholder="Enter tweet ID",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common Outputs that user commonly uses
         id: str = SchemaField(description="Tweet ID")
         text: str = SchemaField(description="Tweet text")
@@ -58,8 +59,6 @@ class TwitterGetTweetBlock(Block):
         )
         meta: dict = SchemaField(description="Metadata about the tweet")
 
-        error: str = SchemaField(description="Error message if the request failed")
-
     def __init__(self):
         super().__init__(
             id="f5155c3a-a630-11ef-9cc1-a309988b4d92",
@@ -67,6 +66,7 @@ class TwitterGetTweetBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetTweetBlock.Input,
             output_schema=TwitterGetTweetBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "tweet_id": "1460323737035677698",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -151,7 +151,7 @@ class TwitterGetTweetBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -202,7 +202,7 @@ class TwitterGetTweetsBlock(Block):
             placeholder="Enter tweet IDs",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common Outputs that user commonly uses
         ids: list[str] = SchemaField(description="All Tweet IDs")
         texts: list[str] = SchemaField(description="All Tweet texts")
@@ -220,8 +220,6 @@ class TwitterGetTweetsBlock(Block):
         )
         meta: dict = SchemaField(description="Metadata about the tweets")
 
-        error: str = SchemaField(description="Error message if the request failed")
-
     def __init__(self):
         super().__init__(
             id="e7cc5420-a630-11ef-bfaf-13bdd8096a51",
@@ -229,6 +227,7 @@ class TwitterGetTweetsBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetTweetsBlock.Input,
             output_schema=TwitterGetTweetsBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "tweet_ids": ["1460323737035677698"],
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -324,7 +323,7 @@ class TwitterGetTweetsBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

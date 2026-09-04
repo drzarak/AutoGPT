@@ -1,7 +1,15 @@
 import { type ClassValue, clsx } from "clsx";
+import _isEmpty from "lodash/isEmpty";
 import { twMerge } from "tailwind-merge";
-import { Category } from "./autogpt-server-api/types";
-import { NodeDimension } from "@/components/Flow";
+
+import {
+  BlockIOObjectSubSchema,
+  BlockIORootSchema,
+  BlockIOSubSchema,
+  Category,
+  GraphInputSubSchema,
+  GraphOutputSubSchema,
+} from "@/lib/autogpt-server-api/types";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -22,7 +30,7 @@ export function hashString(str: string): number {
 
 /** Derived from https://stackoverflow.com/a/32922084 */
 export function deepEquals(x: any, y: any): boolean {
-  const ok = Object.keys,
+  const ok = (obj: any) => Object.keys(obj).filter((key) => obj[key] !== null),
     tx = typeof x,
     ty = typeof y;
 
@@ -70,8 +78,8 @@ export function getTypeBgColor(type: string | null): string {
   );
 }
 
-export function getTypeColor(type: string | null): string {
-  if (type === null) return "#6b7280";
+export function getTypeColor(type: string | undefined): string {
+  if (!type) return "#6b7280";
   return (
     {
       string: "#22c55e",
@@ -82,9 +90,57 @@ export function getTypeColor(type: string | null): string {
       array: "#6366f1",
       null: "#6b7280",
       any: "#6b7280",
-      "": "#6b7280",
     }[type] || "#6b7280"
   );
+}
+
+/**
+ * Extracts the effective type from a JSON schema, handling anyOf/oneOf/allOf wrappers.
+ * Returns the first non-null type found in the schema structure.
+ */
+export function getEffectiveType(
+  schema:
+    | BlockIOSubSchema
+    | GraphInputSubSchema
+    | GraphOutputSubSchema
+    | null
+    | undefined,
+): string | undefined {
+  if (!schema) return undefined;
+
+  // Direct type property
+  if ("type" in schema && schema.type) {
+    return String(schema.type);
+  }
+
+  // Handle allOf - typically a single-item wrapper
+  if (
+    "allOf" in schema &&
+    Array.isArray(schema.allOf) &&
+    schema.allOf.length > 0
+  ) {
+    return getEffectiveType(schema.allOf[0]);
+  }
+
+  // Handle anyOf - e.g. [{ type: "string" }, { type: "null" }]
+  if ("anyOf" in schema && Array.isArray(schema.anyOf)) {
+    for (const item of schema.anyOf) {
+      if ("type" in item && item.type !== "null") {
+        return String(item.type);
+      }
+    }
+  }
+
+  // Handle oneOf
+  if ("oneOf" in schema && Array.isArray(schema.oneOf)) {
+    for (const item of schema.oneOf) {
+      if ("type" in item && item.type !== "null") {
+        return String(item.type);
+      }
+    }
+  }
+
+  return undefined;
 }
 
 export function beautifyString(name: string): string {
@@ -110,6 +166,7 @@ const exceptionMap: Record<string, string> = {
   Json: "JSON",
   Ai: "AI",
   "You Tube": "YouTube",
+  "All Quiet": "AllQuiet",
 };
 
 const applyExceptions = (str: string): string => {
@@ -120,28 +177,9 @@ const applyExceptions = (str: string): string => {
   return str;
 };
 
-/** Recursively remove all "credentials" properties from exported JSON files */
-export function removeCredentials(obj: any) {
-  if (obj && typeof obj === "object") {
-    if (Array.isArray(obj)) {
-      obj.forEach((item) => removeCredentials(item));
-    } else {
-      delete obj.credentials;
-      Object.values(obj).forEach((value) => removeCredentials(value));
-    }
-  }
-  return obj;
-}
-
 export function exportAsJSONFile(obj: object, filename: string): void {
-  // Deep clone the object to avoid modifying the original
-  const sanitizedObj = JSON.parse(JSON.stringify(obj));
-
-  // Sanitize the object
-  removeCredentials(sanitizedObj);
-
   // Create downloadable blob
-  const jsonString = JSON.stringify(sanitizedObj, null, 2);
+  const jsonString = JSON.stringify(obj, null, 2);
   const blob = new Blob([jsonString], { type: "application/json" });
   const url = URL.createObjectURL(blob);
 
@@ -157,6 +195,24 @@ export function exportAsJSONFile(obj: object, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
+export function agentGraphExportFilename(
+  graph: unknown,
+  fallbackName = "agent",
+): string {
+  const { name, version } = (
+    typeof graph === "object" && graph !== null ? graph : {}
+  ) as { name?: unknown; version?: unknown };
+  const rawName = typeof name === "string" && name.trim() ? name : fallbackName;
+  const safeName =
+    rawName
+      .trim()
+      .replace(/[\\/:*?"<>|\x00-\x1f]/g, "_")
+      .replace(/[_ ]+$/, "") || "agent";
+  return typeof version === "number"
+    ? `${safeName}_v${version}.json`
+    : `${safeName}.json`;
+}
+
 export function setNestedProperty(obj: any, path: string, value: any) {
   if (!obj || typeof obj !== "object") {
     throw new Error("Target must be a non-null object");
@@ -166,24 +222,29 @@ export function setNestedProperty(obj: any, path: string, value: any) {
     throw new Error("Path must be a non-empty string");
   }
 
-  const keys = path.split(/[\/.]/);
+  // Split by both / and . to handle mixed separators, then filter empty strings
+  const keys = path.split(/[\/.]/).filter((key) => key.length > 0);
 
+  if (keys.length === 0) {
+    throw new Error("Path must be a non-empty string");
+  }
+
+  // Validate keys for prototype pollution protection
   for (const key of keys) {
-    if (
-      !key ||
-      key === "__proto__" ||
-      key === "constructor" ||
-      key === "prototype"
-    ) {
+    if (key === "__proto__" || key === "constructor" || key === "prototype") {
       throw new Error(`Invalid property name: ${key}`);
     }
   }
 
+  // Securely traverse and set nested properties
+  // Use Object.prototype.hasOwnProperty.call() to safely check properties
   let current = obj;
 
   for (let i = 0; i < keys.length - 1; i++) {
     const key = keys[i];
-    if (!current.hasOwnProperty(key)) {
+
+    // Use hasOwnProperty check to avoid prototype chain access
+    if (!Object.prototype.hasOwnProperty.call(current, key)) {
       current[key] = {};
     } else if (typeof current[key] !== "object" || current[key] === null) {
       current[key] = {};
@@ -191,35 +252,79 @@ export function setNestedProperty(obj: any, path: string, value: any) {
     current = current[key];
   }
 
-  current[keys[keys.length - 1]] = value;
+  // Set the final value using bracket notation with validated key
+  // Since we've validated all keys, this is safe from prototype pollution
+  const finalKey = keys[keys.length - 1];
+  current[finalKey] = value;
 }
 
-export function removeEmptyStringsAndNulls(obj: any): any {
+export function pruneEmptyValues(
+  obj: any,
+  removeEmptyStrings: boolean = true,
+): any {
   if (Array.isArray(obj)) {
     // If obj is an array, recursively check each element,
     // but element removal is avoided to prevent index changes.
     return obj.map((item) =>
       item === undefined || item === null
         ? ""
-        : removeEmptyStringsAndNulls(item),
+        : pruneEmptyValues(item, removeEmptyStrings),
     );
   } else if (typeof obj === "object" && obj !== null) {
     // If obj is an object, recursively remove empty strings and nulls from its properties
     for (const key in obj) {
-      if (obj.hasOwnProperty(key)) {
-        const value = obj[key];
-        if (
-          value === null ||
-          value === undefined ||
-          (typeof value === "string" && value === "")
-        ) {
-          delete obj[key];
-        } else {
-          obj[key] = removeEmptyStringsAndNulls(value);
+      if (!obj.hasOwnProperty(key)) continue;
+
+      const value = obj[key];
+      if (
+        value === null ||
+        value === undefined ||
+        (typeof value === "string" && value === "" && removeEmptyStrings)
+      ) {
+        delete obj[key];
+      } else if (typeof value === "object") {
+        obj[key] = pruneEmptyValues(value, removeEmptyStrings);
+      }
+    }
+  }
+  return obj;
+}
+
+export function fillObjectDefaultsFromSchema(
+  obj: Record<any, any>,
+  schema: BlockIORootSchema | BlockIOObjectSubSchema,
+) {
+  for (const key in schema.properties) {
+    if (!schema.properties.hasOwnProperty(key)) continue;
+
+    const propertySchema = schema.properties[key];
+
+    if ("default" in propertySchema && propertySchema.default !== undefined) {
+      // Apply simple default values
+      obj[key] ??= propertySchema.default;
+    } else if (
+      propertySchema.type === "object" &&
+      "properties" in propertySchema
+    ) {
+      // Recursively fill defaults for nested objects
+      obj[key] = fillObjectDefaultsFromSchema(obj[key] ?? {}, propertySchema);
+    } else if (propertySchema.type === "array") {
+      obj[key] ??= [];
+      // If the array items are objects, fill their defaults as well
+      if (
+        Array.isArray(obj[key]) &&
+        propertySchema.items?.type === "object" &&
+        "properties" in propertySchema.items
+      ) {
+        for (const item of obj[key]) {
+          if (typeof item === "object" && item !== null) {
+            fillObjectDefaultsFromSchema(item, propertySchema.items);
+          }
         }
       }
     }
   }
+
   return obj;
 }
 
@@ -243,99 +348,6 @@ export function getPrimaryCategoryColor(categories: Category[]): string {
   return (
     categoryColorMap[categories[0].category] || "bg-gray-300 dark:bg-slate-700"
   );
-}
-
-export function filterBlocksByType<T>(
-  blocks: T[],
-  predicate: (block: T) => boolean,
-): T[] {
-  return blocks.filter(predicate);
-}
-
-export enum BehaveAs {
-  CLOUD = "CLOUD",
-  LOCAL = "LOCAL",
-}
-
-export function getBehaveAs(): BehaveAs {
-  return process.env.NEXT_PUBLIC_BEHAVE_AS === "CLOUD"
-    ? BehaveAs.CLOUD
-    : BehaveAs.LOCAL;
-}
-
-function rectanglesOverlap(
-  rect1: { x: number; y: number; width: number; height?: number },
-  rect2: { x: number; y: number; width: number; height?: number },
-): boolean {
-  const x1 = rect1.x,
-    y1 = rect1.y,
-    w1 = rect1.width,
-    h1 = rect1.height ?? 100;
-  const x2 = rect2.x,
-    y2 = rect2.y,
-    w2 = rect2.width,
-    h2 = rect2.height ?? 100;
-
-  // Check if the rectangles do not overlap
-  return !(x1 + w1 <= x2 || x1 >= x2 + w2 || y1 + h1 <= y2 || y1 >= y2 + h2);
-}
-
-export function findNewlyAddedBlockCoordinates(
-  nodeDimensions: NodeDimension,
-  newWidth: number,
-  margin: number,
-  zoom: number,
-) {
-  const nodeDimensionArray = Object.values(nodeDimensions);
-
-  for (let i = nodeDimensionArray.length - 1; i >= 0; i--) {
-    const lastNode = nodeDimensionArray[i];
-    const lastNodeHeight = lastNode.height ?? 100;
-
-    // Right of the last node
-    let newX = lastNode.x + lastNode.width + margin;
-    let newY = lastNode.y;
-    let newRect = { x: newX, y: newY, width: newWidth, height: 100 / zoom };
-
-    const collisionRight = nodeDimensionArray.some((node) =>
-      rectanglesOverlap(newRect, node),
-    );
-
-    if (!collisionRight) {
-      return { x: newX, y: newY };
-    }
-
-    // Left of the last node
-    newX = lastNode.x - newWidth - margin;
-    newRect = { x: newX, y: newY, width: newWidth, height: 100 / zoom };
-
-    const collisionLeft = nodeDimensionArray.some((node) =>
-      rectanglesOverlap(newRect, node),
-    );
-
-    if (!collisionLeft) {
-      return { x: newX, y: newY };
-    }
-
-    // Below the last node
-    newX = lastNode.x;
-    newY = lastNode.y + lastNodeHeight + margin;
-    newRect = { x: newX, y: newY, width: newWidth, height: 100 / zoom };
-
-    const collisionBelow = nodeDimensionArray.some((node) =>
-      rectanglesOverlap(newRect, node),
-    );
-
-    if (!collisionBelow) {
-      return { x: newX, y: newY };
-    }
-  }
-
-  // Default position if no space is found
-  return {
-    x: 0,
-    y: 0,
-  };
 }
 
 export function hasNonNullNonObjectValue(obj: any): boolean {
@@ -389,4 +401,70 @@ export function getValue(key: string, value: any) {
     }
     return acc[k.key];
   }, value);
+}
+
+/** Check if a string is empty or whitespace */
+export function isEmptyOrWhitespace(str: string | undefined | null): boolean {
+  return !str || str.trim().length === 0;
+}
+
+export function isEmpty(value: any): boolean {
+  return (
+    value === undefined ||
+    value === "" ||
+    (typeof value === "object" &&
+      (value instanceof Date ? isNaN(value.getTime()) : _isEmpty(value))) ||
+    (typeof value === "number" && isNaN(value))
+  );
+}
+
+/** Check if a value is an object or not */
+export function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Validate YouTube URL */
+export function validateYouTubeUrl(val: string): boolean {
+  if (!val) return true;
+  try {
+    const url = new URL(val);
+    const allowedHosts = [
+      "youtube.com",
+      "www.youtube.com",
+      "youtu.be",
+      "www.youtu.be",
+    ];
+    return allowedHosts.includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+export function isValidUUID(value: string): boolean {
+  const uuidRegex =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  return uuidRegex.test(value);
+}
+
+export function getApprovedMarketplaceUrl(args: {
+  creatorUsername: string | null | undefined;
+  slug: string | null | undefined;
+  isApproved: boolean;
+}): string | undefined {
+  if (!args.isApproved || !args.creatorUsername || !args.slug) {
+    return undefined;
+  }
+  return `/marketplace/agent/${encodeURIComponent(args.creatorUsername)}/${encodeURIComponent(args.slug)}`;
+}
+
+/**
+ * True when `pathname` is `base` itself or one of its sub-routes. Tolerates the
+ * `null` that `usePathname()` is typed to return.
+ */
+export function matchesRoute(
+  pathname: string | null | undefined,
+  base: string,
+): boolean {
+  if (!pathname) return false;
+  return pathname === base || pathname.startsWith(`${base}/`);
 }

@@ -4,14 +4,21 @@ from pydantic import BaseModel
 from todoist_api_python.api import TodoistAPI
 from typing_extensions import Optional
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.todoist._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TODOIST_OAUTH_IS_CONFIGURED,
     TodoistCredentials,
     TodoistCredentialsField,
     TodoistCredentialsInput,
 )
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -28,7 +35,7 @@ class ProjectId(BaseModel):
 class TodoistCreateCommentBlock(Block):
     """Creates a new comment on a Todoist task or project"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         content: str = SchemaField(description="Comment content")
         id_type: Union[TaskId, ProjectId] = SchemaField(
@@ -41,7 +48,7 @@ class TodoistCreateCommentBlock(Block):
             description="Optional file attachment", default=None
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         id: str = SchemaField(description="ID of created comment")
         content: str = SchemaField(description="Comment content")
         posted_at: str = SchemaField(description="Comment timestamp")
@@ -52,8 +59,6 @@ class TodoistCreateCommentBlock(Block):
             description="Associated project ID", default=None
         )
 
-        error: str = SchemaField(description="Error message if the request failed")
-
     def __init__(self):
         super().__init__(
             id="1bba7e54-2310-4a31-8e6f-54d5f9ab7459",
@@ -61,6 +66,7 @@ class TodoistCreateCommentBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistCreateCommentBlock.Input,
             output_schema=TodoistCreateCommentBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "content": "Test comment",
@@ -106,7 +112,7 @@ class TodoistCreateCommentBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -144,7 +150,7 @@ class TodoistCreateCommentBlock(Block):
 class TodoistGetCommentsBlock(Block):
     """Get all comments for a Todoist task or project"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         id_type: Union[TaskId, ProjectId] = SchemaField(
             discriminator="discriminator",
@@ -153,9 +159,8 @@ class TodoistGetCommentsBlock(Block):
             advanced=False,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         comments: list = SchemaField(description="List of comments")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -164,6 +169,7 @@ class TodoistGetCommentsBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistGetCommentsBlock.Input,
             output_schema=TodoistGetCommentsBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "id_type": {"discriminator": "task", "task_id": "2995104339"},
@@ -212,7 +218,7 @@ class TodoistGetCommentsBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -241,11 +247,11 @@ class TodoistGetCommentsBlock(Block):
 class TodoistGetCommentBlock(Block):
     """Get a single comment from Todoist using comment ID"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         comment_id: str = SchemaField(description="Comment ID to retrieve")
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         content: str = SchemaField(description="Comment content")
         id: str = SchemaField(description="Comment ID")
         posted_at: str = SchemaField(description="Comment timestamp")
@@ -259,8 +265,6 @@ class TodoistGetCommentBlock(Block):
             description="Optional file attachment", default=None
         )
 
-        error: str = SchemaField(description="Error message if the request failed")
-
     def __init__(self):
         super().__init__(
             id="a809d264-ddf2-11ef-9764-32d3674e8b7e",
@@ -268,6 +272,7 @@ class TodoistGetCommentBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistGetCommentBlock.Input,
             output_schema=TodoistGetCommentBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "comment_id": "2992679862",
@@ -303,7 +308,7 @@ class TodoistGetCommentBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -330,14 +335,13 @@ class TodoistGetCommentBlock(Block):
 class TodoistUpdateCommentBlock(Block):
     """Updates a Todoist comment"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         comment_id: str = SchemaField(description="Comment ID to update")
         content: str = SchemaField(description="New content for the comment")
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the update was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -346,6 +350,7 @@ class TodoistUpdateCommentBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistUpdateCommentBlock.Input,
             output_schema=TodoistUpdateCommentBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "comment_id": "2992679862",
@@ -366,7 +371,7 @@ class TodoistUpdateCommentBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -389,13 +394,12 @@ class TodoistUpdateCommentBlock(Block):
 class TodoistDeleteCommentBlock(Block):
     """Deletes a Todoist comment"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         comment_id: str = SchemaField(description="Comment ID to delete")
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the deletion was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -404,6 +408,7 @@ class TodoistDeleteCommentBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistDeleteCommentBlock.Input,
             output_schema=TodoistDeleteCommentBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "comment_id": "2992679862",
@@ -423,7 +428,7 @@ class TodoistDeleteCommentBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

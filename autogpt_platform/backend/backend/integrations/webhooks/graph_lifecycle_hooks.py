@@ -1,221 +1,242 @@
+import asyncio
 import logging
-from typing import TYPE_CHECKING, Callable, Optional, cast
+from typing import TYPE_CHECKING, Optional, cast, overload
 
-from backend.data.block import BlockSchema, BlockWebhookConfig, get_block
+from backend.blocks._base import BlockSchema
 from backend.data.graph import set_node_webhook
-from backend.integrations.webhooks import WEBHOOK_MANAGERS_BY_NAME
+from backend.data.integrations import get_webhook
+from backend.integrations.creds_manager import IntegrationCredentialsManager
+
+from . import get_webhook_manager, supports_webhooks
 
 if TYPE_CHECKING:
-    from backend.data.graph import GraphModel, NodeModel
+    from backend.data.graph import BaseGraph, GraphModel, Node, NodeModel
     from backend.data.model import Credentials
 
     from ._base import BaseWebhooksManager
 
 logger = logging.getLogger(__name__)
+credentials_manager = IntegrationCredentialsManager()
 
 
-async def on_graph_activate(
-    graph: "GraphModel", get_credentials: Callable[[str], "Credentials | None"]
-):
+class GraphActivationError(Exception):
+    """Raised when a graph cannot be activated (e.g. a required credential is
+    missing, revoked, or its OAuth token can no longer be refreshed).
+
+    Callers in the API layer should map this to HTTP 400 so the user sees a
+    clear, actionable message instead of an opaque 500.
     """
-    Hook to be called when a graph is activated/created.
 
-    ⚠️ Assuming node entities are not re-used between graph versions, ⚠️
-    this hook calls `on_node_activate` on all nodes in this graph.
 
-    Params:
-        get_credentials: `credentials_id` -> Credentials
+async def before_graph_activate(graph: "GraphModel", user_id: str) -> "GraphModel":
     """
-    # Compare nodes in new_graph_version with previous_graph_version
-    updated_nodes = []
-    for new_node in graph.nodes:
-        block = get_block(new_node.block_id)
-        if not block:
-            raise ValueError(
-                f"Node #{new_node.id} is instance of unknown block #{new_node.block_id}"
-            )
-        block_input_schema = cast(BlockSchema, block.input_schema)
+    Pre-activation hook: validates node credentials and clears stale optional
+    credential references in-memory. MUST be called BEFORE the graph is
+    persisted (and before it is marked active) — a failure here means nothing
+    should be saved, and the returned graph carries cleanup mutations that
+    need to be persisted by the caller.
 
-        node_credentials = None
-        if (
-            # Webhook-triggered blocks are only allowed to have 1 credentials input
-            (
-                creds_field_name := next(
-                    iter(block_input_schema.get_credentials_fields()), None
-                )
-            )
-            and (creds_meta := new_node.input_default.get(creds_field_name))
-            and not (node_credentials := get_credentials(creds_meta["id"]))
-        ):
-            raise ValueError(
-                f"Node #{new_node.id} input '{creds_field_name}' updated with "
-                f"non-existent credentials #{creds_meta['id']}"
-            )
+    Do not use this for post-activation state changes; it has no DB writes
+    and is intentionally side-effect-free outside the passed-in graph object.
 
-        updated_node = await on_node_activate(
-            graph.user_id, new_node, credentials=node_credentials
-        )
-        updated_nodes.append(updated_node)
+    ⚠️ Assumes node entities are not re-used between graph versions. ⚠️
 
-    graph.nodes = updated_nodes
+    Raises:
+        GraphActivationError: when a required node credential is missing or
+            unusable.
+    """
+    graph = await _before_graph_activate(graph, user_id)
+    graph.sub_graphs = await asyncio.gather(
+        *(_before_graph_activate(sub_graph, user_id) for sub_graph in graph.sub_graphs)
+    )
     return graph
 
 
-async def on_graph_deactivate(
-    graph: "GraphModel", get_credentials: Callable[[str], "Credentials | None"]
-):
+@overload
+async def _before_graph_activate(graph: "GraphModel", user_id: str) -> "GraphModel": ...
+
+
+@overload
+async def _before_graph_activate(graph: "BaseGraph", user_id: str) -> "BaseGraph": ...
+
+
+async def _before_graph_activate(graph: "BaseGraph | GraphModel", user_id: str):
+    get_credentials = credentials_manager.cached_getter(user_id)
+
+    # Collect every (node, field) credential reference up front so we can
+    # resolve them in one parallel batch — important when a graph has
+    # several distinct OAuth credentials that each need a refresh round-trip.
+    refs: list[tuple["Node | NodeModel", str, dict, BlockSchema]] = []
+    for new_node in graph.nodes:
+        block_input_schema = cast(BlockSchema, new_node.block.input_schema)
+        for creds_field_name in block_input_schema.get_credentials_fields():
+            creds_meta = new_node.input_default.get(creds_field_name)
+            # A meta without `id` means no credential was selected. The form
+            # can emit provider/type on their own, so this shape is reachable
+            # without any user action; treat it as unset instead of indexing
+            # it. Required-but-unset is caught by execution-time validation,
+            # which can name the block and field.
+            if not creds_meta or not creds_meta.get("id"):
+                continue
+            refs.append((new_node, creds_field_name, creds_meta, block_input_schema))
+
+    unique_ids = list({m["id"] for _, _, m, _ in refs})
+    results = await asyncio.gather(
+        *(get_credentials(cid) for cid in unique_ids),
+        return_exceptions=True,
+    )
+    cred_by_id: dict[str, "Credentials | None | BaseException"] = dict(
+        zip(unique_ids, results)
+    )
+
+    for new_node, creds_field_name, creds_meta, block_input_schema in refs:
+        _apply_credential_result(
+            new_node,
+            creds_field_name,
+            creds_meta,
+            block_input_schema,
+            cred_by_id[creds_meta["id"]],
+        )
+
+    return graph
+
+
+def _apply_credential_result(
+    new_node: "Node | NodeModel",
+    creds_field_name: str,
+    creds_meta: dict,
+    block_input_schema: BlockSchema,
+    result: "Credentials | None | BaseException",
+) -> None:
+    """Apply the resolution outcome for one credential reference: leave
+    usable ones alone, clear stale optional ones in-memory, or raise
+    `GraphActivationError` for required + unusable ones.
+
+    Treats both `None` (credential missing from DB) and an exception
+    (OAuth refresh raised, infra error) as "unusable" — failures are
+    logged here so the caller doesn't have to.
+    """
+    refresh_error: str | None = None
+    if isinstance(result, BaseException):
+        # Distinguish known credential-side failures (OAuth refresh rejected,
+        # 401/403 from the provider) from infra failures (DB pool exhaustion,
+        # Redis timeout, TypeError, …) so the latter show up at error level
+        # with a stack trace instead of being silently misreported as
+        # "please reconnect".
+        error_str = repr(result).lower()
+        is_known_credential_error = any(
+            sig in error_str
+            for sig in (
+                "invalid_grant",
+                "invalid_token",
+                "unauthorized",
+                "forbidden",
+                " 401",
+                " 403",
+            )
+        )
+        log_message = (
+            f"Node #{new_node.id}: failed to load credentials "
+            f"#{creds_meta['id']} for '{creds_field_name}': {result!r}"
+        )
+        if is_known_credential_error:
+            logger.warning(log_message)
+        else:
+            logger.error(log_message, exc_info=result)
+        refresh_error = str(result) or result.__class__.__name__
+        resolved = None
+    else:
+        resolved = result
+
+    if resolved:
+        return
+
+    # If the credential field is optional (has a default in the schema, or
+    # node metadata marks it optional), clear the stale reference instead
+    # of blocking the save.
+    creds_field_optional = (
+        new_node.credentials_optional
+        or creds_field_name not in block_input_schema.get_required_fields()
+    )
+    if creds_field_optional:
+        new_node.input_default[creds_field_name] = {}
+        logger.warning(
+            f"Node #{new_node.id}: cleared stale optional "
+            f"credentials #{creds_meta['id']} for "
+            f"'{creds_field_name}'"
+        )
+        return
+
+    # User-facing reference: prefer the credential's user-set title and the
+    # block name over internal UUIDs, since users can't act on them. UUIDs
+    # still appear in the warning/error log above for support lookups.
+    credential_label = (
+        f'"{creds_meta["title"]}" {creds_meta["provider"]}'
+        if creds_meta.get("title")
+        else creds_meta.get("provider", "unknown")
+    )
+    credential_ref = (
+        f"The {credential_label} credential used by the " f"{new_node.block.name} node"
+    )
+
+    if refresh_error:
+        raise GraphActivationError(
+            f"{credential_ref} could not be loaded ({refresh_error}). "
+            "It may have been revoked or its access expired — please "
+            "reconnect this integration and try again."
+        )
+    raise GraphActivationError(
+        f"{credential_ref} no longer exists. Please pick a different "
+        "credential and try again."
+    )
+
+
+async def on_graph_deactivate(graph: "GraphModel", user_id: str):
     """
     Hook to be called when a graph is deactivated/deleted.
 
     ⚠️ Assuming node entities are not re-used between graph versions, ⚠️
     this hook calls `on_node_deactivate` on all nodes in `graph`.
-
-    Params:
-        get_credentials: `credentials_id` -> Credentials
     """
+    get_credentials = credentials_manager.cached_getter(user_id)
     updated_nodes = []
     for node in graph.nodes:
-        block = get_block(node.block_id)
-        if not block:
-            raise ValueError(
-                f"Node #{node.id} is instance of unknown block #{node.block_id}"
-            )
-        block_input_schema = cast(BlockSchema, block.input_schema)
+        block_input_schema = cast(BlockSchema, node.block.input_schema)
 
+        # First resolved credential wins. Assigning unconditionally per field
+        # meant a block with several credential fields passed only the last
+        # one, and a failed lookup on that last field discarded a credential
+        # an earlier field had resolved successfully.
         node_credentials = None
-        if (
-            # Webhook-triggered blocks are only allowed to have 1 credentials input
-            (
-                creds_field_name := next(
-                    iter(block_input_schema.get_credentials_fields()), None
+        for creds_field_name in block_input_schema.get_credentials_fields():
+            # Same shape guard as activation: a meta without `id` means no
+            # credential was selected, and indexing it would raise KeyError.
+            # Persisted graphs can carry this id-less shape, so deactivation
+            # has to tolerate it.
+            creds_meta = node.input_default.get(creds_field_name)
+            if not creds_meta or not (creds_id := creds_meta.get("id")):
+                continue
+            resolved = await get_credentials(creds_id)
+            if not resolved:
+                logger.warning(
+                    f"Node #{node.id} input '{creds_field_name}' referenced "
+                    f"non-existent credentials #{creds_id}"
                 )
-            )
-            and (creds_meta := node.input_default.get(creds_field_name))
-            and not (node_credentials := get_credentials(creds_meta["id"]))
-        ):
-            logger.error(
-                f"Node #{node.id} input '{creds_field_name}' referenced non-existent "
-                f"credentials #{creds_meta['id']}"
-            )
+                continue
+            if node_credentials is None:
+                node_credentials = resolved
 
-        updated_node = await on_node_deactivate(node, credentials=node_credentials)
+        updated_node = await on_node_deactivate(
+            user_id, node, credentials=node_credentials
+        )
         updated_nodes.append(updated_node)
 
     graph.nodes = updated_nodes
     return graph
 
 
-async def on_node_activate(
-    user_id: str,
-    node: "NodeModel",
-    *,
-    credentials: Optional["Credentials"] = None,
-) -> "NodeModel":
-    """Hook to be called when the node is activated/created"""
-
-    block = get_block(node.block_id)
-    if not block:
-        raise ValueError(
-            f"Node #{node.id} is instance of unknown block #{node.block_id}"
-        )
-
-    if not block.webhook_config:
-        return node
-
-    provider = block.webhook_config.provider
-    if provider not in WEBHOOK_MANAGERS_BY_NAME:
-        raise ValueError(
-            f"Block #{block.id} has webhook_config for provider {provider} "
-            "which does not support webhooks"
-        )
-
-    logger.debug(
-        f"Activating webhook node #{node.id} with config {block.webhook_config}"
-    )
-
-    webhooks_manager = WEBHOOK_MANAGERS_BY_NAME[provider]()
-
-    if auto_setup_webhook := isinstance(block.webhook_config, BlockWebhookConfig):
-        try:
-            resource = block.webhook_config.resource_format.format(**node.input_default)
-        except KeyError:
-            resource = None
-        logger.debug(
-            f"Constructed resource string {resource} from input {node.input_default}"
-        )
-    else:
-        resource = ""  # not relevant for manual webhooks
-
-    block_input_schema = cast(BlockSchema, block.input_schema)
-    credentials_field_name = next(iter(block_input_schema.get_credentials_fields()), "")
-    credentials_meta = (
-        node.input_default.get(credentials_field_name)
-        if credentials_field_name
-        else None
-    )
-    event_filter_input_name = block.webhook_config.event_filter_input
-    has_everything_for_webhook = (
-        resource is not None
-        and (credentials_meta or not credentials_field_name)
-        and (
-            not event_filter_input_name
-            or (
-                event_filter_input_name in node.input_default
-                and any(
-                    is_on
-                    for is_on in node.input_default[event_filter_input_name].values()
-                )
-            )
-        )
-    )
-
-    if has_everything_for_webhook and resource is not None:
-        logger.debug(f"Node #{node} has everything for a webhook!")
-        if credentials_meta and not credentials:
-            raise ValueError(
-                f"Cannot set up webhook for node #{node.id}: "
-                f"credentials #{credentials_meta['id']} not available"
-            )
-
-        if event_filter_input_name:
-            # Shape of the event filter is enforced in Block.__init__
-            event_filter = cast(dict, node.input_default[event_filter_input_name])
-            events = [
-                block.webhook_config.event_format.format(event=event)
-                for event, enabled in event_filter.items()
-                if enabled is True
-            ]
-            logger.debug(f"Webhook events to subscribe to: {', '.join(events)}")
-        else:
-            events = []
-
-        # Find/make and attach a suitable webhook to the node
-        if auto_setup_webhook:
-            assert credentials is not None
-            new_webhook = await webhooks_manager.get_suitable_auto_webhook(
-                user_id,
-                credentials,
-                block.webhook_config.webhook_type,
-                resource,
-                events,
-            )
-        else:
-            # Manual webhook -> no credentials -> don't register but do create
-            new_webhook = await webhooks_manager.get_manual_webhook(
-                user_id,
-                node.graph_id,
-                block.webhook_config.webhook_type,
-                events,
-            )
-        logger.debug(f"Acquired webhook: {new_webhook}")
-        return await set_node_webhook(node.id, new_webhook.id)
-    else:
-        logger.debug(f"Node #{node.id} does not have everything for a webhook")
-
-    return node
-
-
 async def on_node_deactivate(
+    user_id: str,
     node: "NodeModel",
     *,
     credentials: Optional["Credentials"] = None,
@@ -224,47 +245,46 @@ async def on_node_deactivate(
     """Hook to be called when node is deactivated/deleted"""
 
     logger.debug(f"Deactivating node #{node.id}")
-    block = get_block(node.block_id)
-    if not block:
-        raise ValueError(
-            f"Node #{node.id} is instance of unknown block #{node.block_id}"
-        )
+    block = node.block
 
     if not block.webhook_config:
         return node
 
     provider = block.webhook_config.provider
-    if provider not in WEBHOOK_MANAGERS_BY_NAME:
+    if not supports_webhooks(provider):
         raise ValueError(
             f"Block #{block.id} has webhook_config for provider {provider} "
             "which does not support webhooks"
         )
 
-    webhooks_manager = WEBHOOK_MANAGERS_BY_NAME[provider]()
+    webhooks_manager = get_webhook_manager(provider)
 
-    if node.webhook_id:
-        logger.debug(f"Node #{node.id} has webhook_id {node.webhook_id}")
-        if not node.webhook:
-            logger.error(f"Node #{node.id} has webhook_id but no webhook object")
-            raise ValueError("node.webhook not included")
+    if webhook_id := node.webhook_id:
+        logger.warning(
+            f"Node #{node.id} still attached to webhook #{webhook_id} - "
+            "did migration by `migrate_legacy_triggered_graphs` fail? "
+            "Triggered nodes are deprecated since Significant-Gravitas/AutoGPT#10418."
+        )
+        webhook = await get_webhook(webhook_id)
 
         # Detach webhook from node
         logger.debug(f"Detaching webhook from node #{node.id}")
         updated_node = await set_node_webhook(node.id, None)
 
         # Prune and deregister the webhook if it is no longer used anywhere
-        webhook = node.webhook
         logger.debug(
             f"Pruning{' and deregistering' if credentials else ''} "
-            f"webhook #{webhook.id}"
+            f"webhook #{webhook_id}"
         )
-        await webhooks_manager.prune_webhook_if_dangling(webhook.id, credentials)
+        await webhooks_manager.prune_webhook_if_dangling(
+            user_id, webhook_id, credentials
+        )
         if (
             cast(BlockSchema, block.input_schema).get_credentials_fields()
             and not credentials
         ):
             logger.warning(
-                f"Cannot deregister webhook #{webhook.id}: credentials "
+                f"Cannot deregister webhook #{webhook_id}: credentials "
                 f"#{webhook.credentials_id} not available "
                 f"({webhook.provider.value} webhook ID: {webhook.provider_webhook_id})"
             )

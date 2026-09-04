@@ -3,9 +3,17 @@ from typing import cast
 import tweepy
 from tweepy.client import Response
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
@@ -22,7 +30,6 @@ from backend.blocks.twitter._types import (
     UserExpansionsFilter,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -32,7 +39,7 @@ class TwitterUnmuteUserBlock(Block):
     The request succeeds with no action when the user sends a request to a user they're not muting or have already unmuted.
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["users.read", "users.write", "offline.access"]
         )
@@ -42,11 +49,10 @@ class TwitterUnmuteUserBlock(Block):
             placeholder="Enter target user ID",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(
             description="Whether the unmute action was successful"
         )
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -55,6 +61,7 @@ class TwitterUnmuteUserBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterUnmuteUserBlock.Input,
             output_schema=TwitterUnmuteUserBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "target_user_id": "12345",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -80,7 +87,7 @@ class TwitterUnmuteUserBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -119,7 +126,7 @@ class TwitterGetMutedUsersBlock(Block):
             advanced=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         ids: list[str] = SchemaField(description="List of muted user IDs")
         usernames: list[str] = SchemaField(description="List of muted usernames")
         next_token: str = SchemaField(description="Next token for pagination")
@@ -130,8 +137,6 @@ class TwitterGetMutedUsersBlock(Block):
         )
         meta: dict = SchemaField(description="Metadata including pagination info")
 
-        error: str = SchemaField(description="Error message if the request failed")
-
     def __init__(self):
         super().__init__(
             id="475024da-a631-11ef-9ccd-f724b8b03cda",
@@ -139,6 +144,7 @@ class TwitterGetMutedUsersBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetMutedUsersBlock.Input,
             output_schema=TwitterGetMutedUsersBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "max_results": 2,
                 "pagination_token": "",
@@ -229,7 +235,7 @@ class TwitterGetMutedUsersBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -266,7 +272,7 @@ class TwitterMuteUserBlock(Block):
     Allows a user to mute another user specified by target user ID
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["users.read", "users.write", "offline.access"]
         )
@@ -276,11 +282,10 @@ class TwitterMuteUserBlock(Block):
             placeholder="Enter target user ID",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(
             description="Whether the mute action was successful"
         )
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -289,6 +294,7 @@ class TwitterMuteUserBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterMuteUserBlock.Input,
             output_schema=TwitterMuteUserBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "target_user_id": "12345",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -314,7 +320,7 @@ class TwitterMuteUserBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

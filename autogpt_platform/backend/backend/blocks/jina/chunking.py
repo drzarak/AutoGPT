@@ -1,15 +1,21 @@
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.jina._auth import (
     JinaCredentials,
     JinaCredentialsField,
     JinaCredentialsInput,
 )
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
-from backend.util.request import requests
+from backend.util.request import Requests
 
 
 class JinaChunkingBlock(Block):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         texts: list = SchemaField(description="List of texts to chunk")
 
         credentials: JinaCredentialsInput = JinaCredentialsField()
@@ -20,10 +26,10 @@ class JinaChunkingBlock(Block):
             description="Whether to return token information", default=False
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         chunks: list = SchemaField(description="List of chunked texts")
         tokens: list = SchemaField(
-            description="List of token information for each chunk", optional=True
+            description="List of token information for each chunk",
         )
 
     def __init__(self):
@@ -35,7 +41,7 @@ class JinaChunkingBlock(Block):
             output_schema=JinaChunkingBlock.Output,
         )
 
-    def run(
+    async def run(
         self, input_data: Input, *, credentials: JinaCredentials, **kwargs
     ) -> BlockOutput:
         url = "https://segment.jina.ai/"
@@ -55,7 +61,7 @@ class JinaChunkingBlock(Block):
                 "max_chunk_length": str(input_data.max_chunk_length),
             }
 
-            response = requests.post(url, headers=headers, json=data)
+            response = await Requests().post(url, headers=headers, json=data)
             result = response.json()
 
             all_chunks.extend(result.get("chunks", []))

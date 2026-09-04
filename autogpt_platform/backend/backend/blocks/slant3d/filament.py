@@ -1,6 +1,6 @@
 from typing import List
 
-from backend.data.block import BlockOutput, BlockSchema
+from backend.blocks._base import BlockOutput, BlockSchemaInput, BlockSchemaOutput
 from backend.data.model import APIKeyCredentials, SchemaField
 
 from ._api import (
@@ -16,14 +16,13 @@ from .base import Slant3DBlockBase
 class Slant3DFilamentBlock(Slant3DBlockBase):
     """Block for retrieving available filaments"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: Slant3DCredentialsInput = Slant3DCredentialsField()
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         filaments: List[Filament] = SchemaField(
             description="List of available filaments"
         )
-        error: str = SchemaField(description="Error message if request failed")
 
     def __init__(self):
         super().__init__(
@@ -72,11 +71,11 @@ class Slant3DFilamentBlock(Slant3DBlockBase):
             },
         )
 
-    def run(
+    async def run(
         self, input_data: Input, *, credentials: APIKeyCredentials, **kwargs
     ) -> BlockOutput:
         try:
-            result = self._make_request(
+            result = await self._make_request(
                 "GET", "filament", credentials.api_key.get_secret_value()
             )
             yield "filaments", result["filaments"]

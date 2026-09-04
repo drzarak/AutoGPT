@@ -3,9 +3,17 @@ from typing import cast
 import tweepy
 from tweepy.client import Response
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
@@ -22,7 +30,6 @@ from backend.blocks.twitter._types import (
     UserExpansionsFilter,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -31,7 +38,7 @@ class TwitterRetweetBlock(Block):
     Retweets a tweet on Twitter
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["tweet.read", "tweet.write", "users.read", "offline.access"]
         )
@@ -41,9 +48,8 @@ class TwitterRetweetBlock(Block):
             placeholder="Enter tweet ID",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the retweet was successful")
-        error: str = SchemaField(description="Error message if the retweet failed")
 
     def __init__(self):
         super().__init__(
@@ -52,6 +58,7 @@ class TwitterRetweetBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterRetweetBlock.Input,
             output_schema=TwitterRetweetBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "tweet_id": "1234567890",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -83,7 +90,7 @@ class TwitterRetweetBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -105,7 +112,7 @@ class TwitterRemoveRetweetBlock(Block):
     Removes a retweet on Twitter
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["tweet.read", "tweet.write", "users.read", "offline.access"]
         )
@@ -115,11 +122,10 @@ class TwitterRemoveRetweetBlock(Block):
             placeholder="Enter tweet ID",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(
             description="Whether the retweet was successfully removed"
         )
-        error: str = SchemaField(description="Error message if the removal failed")
 
     def __init__(self):
         super().__init__(
@@ -128,6 +134,7 @@ class TwitterRemoveRetweetBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterRemoveRetweetBlock.Input,
             output_schema=TwitterRemoveRetweetBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "tweet_id": "1234567890",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -159,7 +166,7 @@ class TwitterRemoveRetweetBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -204,7 +211,7 @@ class TwitterGetRetweetersBlock(Block):
             default="",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common Outputs that user commonly uses
         ids: list = SchemaField(description="List of user ids who retweeted")
         names: list = SchemaField(description="List of user names who retweeted")
@@ -222,8 +229,6 @@ class TwitterGetRetweetersBlock(Block):
             description="Provides metadata such as pagination info (next_token) or result counts"
         )
 
-        error: str = SchemaField(description="Error message if the request failed")
-
     def __init__(self):
         super().__init__(
             id="ad7aa6fa-a630-11ef-a6b0-e7ca640aa030",
@@ -231,6 +236,7 @@ class TwitterGetRetweetersBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetRetweetersBlock.Input,
             output_schema=TwitterGetRetweetersBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "tweet_id": "1234567890",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -324,7 +330,7 @@ class TwitterGetRetweetersBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

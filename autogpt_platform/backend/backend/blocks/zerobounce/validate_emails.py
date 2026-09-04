@@ -7,6 +7,13 @@ from zerobouncesdk.zb_validate_response import (
     ZBValidateSubStatus,
 )
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.zerobounce._api import ZeroBounceClient
 from backend.blocks.zerobounce._auth import (
     TEST_CREDENTIALS,
@@ -14,8 +21,7 @@ from backend.blocks.zerobounce._auth import (
     ZeroBounceCredentials,
     ZeroBounceCredentialsInput,
 )
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
-from backend.data.model import SchemaField
+from backend.data.model import CredentialsField, NodeExecutionStats, SchemaField
 
 
 class Response(BaseModel):
@@ -82,7 +88,7 @@ class Response(BaseModel):
 class ValidateEmailsBlock(Block):
     """Search for people in Apollo"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         email: str = SchemaField(
             description="Email to validate",
         )
@@ -90,11 +96,11 @@ class ValidateEmailsBlock(Block):
             description="IP address to validate",
             default="",
         )
-        credentials: ZeroBounceCredentialsInput = SchemaField(
+        credentials: ZeroBounceCredentialsInput = CredentialsField(
             description="ZeroBounce credentials",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         response: Response = SchemaField(
             description="Response from ZeroBounce",
         )
@@ -134,20 +140,22 @@ class ValidateEmailsBlock(Block):
                 )
             ],
             test_mock={
-                "validate_email": lambda email, ip_address, credentials: ZBValidateResponse(
-                    data={
-                        "address": email,
-                        "status": ZBValidateStatus.valid,
-                        "sub_status": ZBValidateSubStatus.allowed,
-                        "account": "test",
-                        "domain": "test.com",
-                        "did_you_mean": None,
-                        "domain_age_days": None,
-                        "free_email": False,
-                        "mx_found": False,
-                        "mx_record": None,
-                        "smtp_provider": None,
-                    }
+                "validate_email": lambda email, ip_address, credentials: (
+                    ZBValidateResponse(
+                        data={
+                            "address": email,
+                            "status": ZBValidateStatus.valid,
+                            "sub_status": ZBValidateSubStatus.allowed,
+                            "account": "test",
+                            "domain": "test.com",
+                            "did_you_mean": None,
+                            "domain_age_days": None,
+                            "free_email": False,
+                            "mx_found": False,
+                            "mx_record": None,
+                            "smtp_provider": None,
+                        }
+                    )
                 )
             },
         )
@@ -159,7 +167,7 @@ class ValidateEmailsBlock(Block):
         client = ZeroBounceClient(credentials.api_key.get_secret_value())
         return client.validate_email(email, ip_address)
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -168,6 +176,13 @@ class ValidateEmailsBlock(Block):
     ) -> BlockOutput:
         response: ZBValidateResponse = self.validate_email(
             input_data.email, input_data.ip_address, credentials
+        )
+
+        # ZeroBounce bills $0.008 per validated email on the paid tier.
+        # Routed through COST_USD so platform cost telemetry captures real
+        # USD spend; the resolver still bills 2 credits per call.
+        self.merge_stats(
+            NodeExecutionStats(provider_cost=0.008, provider_cost_type="cost_usd")
         )
 
         response_model = Response(**response.__dict__)

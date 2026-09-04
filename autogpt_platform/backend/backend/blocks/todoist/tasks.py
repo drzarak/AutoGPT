@@ -4,21 +4,28 @@ from todoist_api_python.api import TodoistAPI
 from todoist_api_python.models import Task
 from typing_extensions import Optional
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.todoist._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TODOIST_OAUTH_IS_CONFIGURED,
     TodoistCredentials,
     TodoistCredentialsField,
     TodoistCredentialsInput,
 )
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
 class TodoistCreateTaskBlock(Block):
     """Creates a new task in a Todoist project"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         content: str = SchemaField(description="Task content", advanced=False)
         description: Optional[str] = SchemaField(
@@ -71,13 +78,12 @@ class TodoistCreateTaskBlock(Block):
             advanced=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         id: str = SchemaField(description="Task ID")
         url: str = SchemaField(description="Task URL")
         complete_data: dict = SchemaField(
             description="Complete task data as dictionary"
         )
-        error: str = SchemaField(description="Error message if request failed")
 
     def __init__(self):
         super().__init__(
@@ -86,6 +92,7 @@ class TodoistCreateTaskBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistCreateTaskBlock.Input,
             output_schema=TodoistCreateTaskBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "content": "Buy groceries",
@@ -128,7 +135,7 @@ class TodoistCreateTaskBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -179,7 +186,7 @@ class TodoistCreateTaskBlock(Block):
 class TodoistGetTasksBlock(Block):
     """Get active tasks from Todoist"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         project_id: Optional[str] = SchemaField(
             description="Filter tasks by project ID", default=None, advanced=False
@@ -202,13 +209,12 @@ class TodoistGetTasksBlock(Block):
             description="List of task IDs to retrieve", default=None, advanced=False
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         ids: list[str] = SchemaField(description="Task IDs")
         urls: list[str] = SchemaField(description="Task URLs")
         complete_data: list[dict] = SchemaField(
             description="Complete task data as dictionary"
         )
-        error: str = SchemaField(description="Error message if request failed")
 
     def __init__(self):
         super().__init__(
@@ -217,6 +223,7 @@ class TodoistGetTasksBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistGetTasksBlock.Input,
             output_schema=TodoistGetTasksBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "project_id": "2203306141",
@@ -258,7 +265,7 @@ class TodoistGetTasksBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -290,17 +297,16 @@ class TodoistGetTasksBlock(Block):
 class TodoistGetTaskBlock(Block):
     """Get an active task from Todoist"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         task_id: str = SchemaField(description="Task ID to retrieve")
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         project_id: str = SchemaField(description="Project ID containing the task")
         url: str = SchemaField(description="Task URL")
         complete_data: dict = SchemaField(
             description="Complete task data as dictionary"
         )
-        error: str = SchemaField(description="Error message if request failed")
 
     def __init__(self):
         super().__init__(
@@ -309,6 +315,7 @@ class TodoistGetTaskBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistGetTaskBlock.Input,
             output_schema=TodoistGetTaskBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={"credentials": TEST_CREDENTIALS_INPUT, "task_id": "2995104339"},
             test_credentials=TEST_CREDENTIALS,
             test_output=[
@@ -341,7 +348,7 @@ class TodoistGetTaskBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -363,7 +370,7 @@ class TodoistGetTaskBlock(Block):
 class TodoistUpdateTaskBlock(Block):
     """Updates an existing task in Todoist"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         task_id: str = SchemaField(description="Task ID to update")
         content: str = SchemaField(description="Task content", advanced=False)
@@ -417,9 +424,8 @@ class TodoistUpdateTaskBlock(Block):
             advanced=True,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the update was successful")
-        error: str = SchemaField(description="Error message if request failed")
 
     def __init__(self):
         super().__init__(
@@ -428,6 +434,7 @@ class TodoistUpdateTaskBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistUpdateTaskBlock.Input,
             output_schema=TodoistUpdateTaskBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "task_id": "2995104339",
@@ -447,7 +454,7 @@ class TodoistUpdateTaskBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -467,32 +474,24 @@ class TodoistUpdateTaskBlock(Block):
             )
 
             task_updates = {}
-            if input_data.content is not None:
-                task_updates["content"] = input_data.content
-            if input_data.description is not None:
-                task_updates["description"] = input_data.description
-            if input_data.project_id is not None:
-                task_updates["project_id"] = input_data.project_id
-            if input_data.section_id is not None:
-                task_updates["section_id"] = input_data.section_id
-            if input_data.parent_id is not None:
-                task_updates["parent_id"] = input_data.parent_id
-            if input_data.order is not None:
-                task_updates["order"] = input_data.order
-            if input_data.labels is not None:
-                task_updates["labels"] = input_data.labels
-            if input_data.priority is not None:
-                task_updates["priority"] = input_data.priority
-            if due_date is not None:
-                task_updates["due_date"] = due_date
-            if deadline_date is not None:
-                task_updates["deadline_date"] = deadline_date
-            if input_data.assignee_id is not None:
-                task_updates["assignee_id"] = input_data.assignee_id
-            if input_data.duration is not None:
-                task_updates["duration"] = input_data.duration
-            if input_data.duration_unit is not None:
-                task_updates["duration_unit"] = input_data.duration_unit
+            update_fields = {
+                "content": input_data.content,
+                "description": input_data.description,
+                "project_id": input_data.project_id,
+                "section_id": input_data.section_id,
+                "parent_id": input_data.parent_id,
+                "order": input_data.order,
+                "labels": input_data.labels,
+                "priority": input_data.priority,
+                "due_date": due_date,
+                "deadline_date": deadline_date,
+                "assignee_id": input_data.assignee_id,
+                "duration": input_data.duration,
+                "duration_unit": input_data.duration_unit,
+            }
+
+            # Filter out None values
+            task_updates = {k: v for k, v in update_fields.items() if v is not None}
 
             self.update_task(
                 credentials,
@@ -509,15 +508,14 @@ class TodoistUpdateTaskBlock(Block):
 class TodoistCloseTaskBlock(Block):
     """Closes a task in Todoist"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         task_id: str = SchemaField(description="Task ID to close")
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(
             description="Whether the task was successfully closed"
         )
-        error: str = SchemaField(description="Error message if request failed")
 
     def __init__(self):
         super().__init__(
@@ -526,6 +524,7 @@ class TodoistCloseTaskBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistCloseTaskBlock.Input,
             output_schema=TodoistCloseTaskBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={"credentials": TEST_CREDENTIALS_INPUT, "task_id": "2995104339"},
             test_credentials=TEST_CREDENTIALS,
             test_output=[("success", True)],
@@ -541,7 +540,7 @@ class TodoistCloseTaskBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -559,15 +558,14 @@ class TodoistCloseTaskBlock(Block):
 class TodoistReopenTaskBlock(Block):
     """Reopens a task in Todoist"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         task_id: str = SchemaField(description="Task ID to reopen")
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(
             description="Whether the task was successfully reopened"
         )
-        error: str = SchemaField(description="Error message if request failed")
 
     def __init__(self):
         super().__init__(
@@ -576,6 +574,7 @@ class TodoistReopenTaskBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistReopenTaskBlock.Input,
             output_schema=TodoistReopenTaskBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={"credentials": TEST_CREDENTIALS_INPUT, "task_id": "2995104339"},
             test_credentials=TEST_CREDENTIALS,
             test_output=[
@@ -593,7 +592,7 @@ class TodoistReopenTaskBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -611,15 +610,14 @@ class TodoistReopenTaskBlock(Block):
 class TodoistDeleteTaskBlock(Block):
     """Deletes a task in Todoist"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         task_id: str = SchemaField(description="Task ID to delete")
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(
             description="Whether the task was successfully deleted"
         )
-        error: str = SchemaField(description="Error message if request failed")
 
     def __init__(self):
         super().__init__(
@@ -628,6 +626,7 @@ class TodoistDeleteTaskBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistDeleteTaskBlock.Input,
             output_schema=TodoistDeleteTaskBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={"credentials": TEST_CREDENTIALS_INPUT, "task_id": "2995104339"},
             test_credentials=TEST_CREDENTIALS,
             test_output=[
@@ -645,7 +644,7 @@ class TodoistDeleteTaskBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

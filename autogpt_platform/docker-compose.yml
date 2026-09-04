@@ -5,7 +5,9 @@ networks:
     name: shared-network
 
 volumes:
-  db-config:
+  clamav-data:
+  workspace-data:
+  falkordb_data:
 
 x-agpt-services:
   &agpt-services
@@ -13,11 +15,6 @@ x-agpt-services:
     - app-network
     - shared-network
 
-x-supabase-services:
-  &supabase-services
-  networks:
-    - app-network
-    - shared-network
 
 services:
   # AGPT services
@@ -27,11 +24,35 @@ services:
       file: ./docker-compose.platform.yml
       service: migrate
 
-  redis:
+  redis-0:
     <<: *agpt-services
     extends:
       file: ./docker-compose.platform.yml
-      service: redis
+      service: redis-0
+
+  redis-1:
+    <<: *agpt-services
+    extends:
+      file: ./docker-compose.platform.yml
+      service: redis-1
+
+  redis-2:
+    <<: *agpt-services
+    extends:
+      file: ./docker-compose.platform.yml
+      service: redis-2
+
+  redis-init:
+    <<: *agpt-services
+    extends:
+      file: ./docker-compose.platform.yml
+      service: redis-init
+
+  falkordb:
+    <<: *agpt-services
+    extends:
+      file: ./docker-compose.platform.yml
+      service: falkordb
 
   rabbitmq:
     <<: *agpt-services
@@ -51,105 +72,129 @@ services:
       file: ./docker-compose.platform.yml
       service: executor
 
+  copilot_executor:
+    <<: *agpt-services
+    extends:
+      file: ./docker-compose.platform.yml
+      service: copilot_executor
+
   websocket_server:
     <<: *agpt-services
     extends:
       file: ./docker-compose.platform.yml
       service: websocket_server
 
-#  frontend:
-#    <<: *agpt-services
-#    extends:
-#      file: ./docker-compose.platform.yml
-#      service: frontend
-
-  # Supabase services
-  studio:
-    <<: *supabase-services
+  database_manager:
+    <<: *agpt-services
     extends:
-      file: ./supabase/docker/docker-compose.yml
-      service: studio
+      file: ./docker-compose.platform.yml
+      service: database_manager
 
-  kong:
-    <<: *supabase-services
+  scheduler_server:
+    <<: *agpt-services
     extends:
-      file: ./supabase/docker/docker-compose.yml
-      service: kong
+      file: ./docker-compose.platform.yml
+      service: scheduler_server
 
-  auth:
-    <<: *supabase-services
+  notification_server:
+    <<: *agpt-services
     extends:
-      file: ./supabase/docker/docker-compose.yml
-      service: auth
+      file: ./docker-compose.platform.yml
+      service: notification_server
+
+  platform_linking_manager:
+    <<: *agpt-services
+    profiles: ["bot"]
+    extends:
+      file: ./docker-compose.platform.yml
+      service: platform_linking_manager
+
+  clamav:
+    <<: *agpt-services
+    image: clamav/clamav-debian:latest
+    ports:
+      - "3310:3310"
+    volumes:
+      - clamav-data:/var/lib/clamav
     environment:
-      GOTRUE_MAILER_AUTOCONFIRM: true
+      - CLAMAV_NO_FRESHCLAMD=false
+      - CLAMD_CONF_StreamMaxLength=50M
+      - CLAMD_CONF_MaxFileSize=100M
+      - CLAMD_CONF_MaxScanSize=100M
+      - CLAMD_CONF_MaxThreads=12
+      - CLAMD_CONF_ReadTimeout=300
+      - CLAMD_CONF_TCPAddr=0.0.0.0
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --version || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  rest:
-    <<: *supabase-services
+  frontend:
+    <<: *agpt-services
     extends:
-      file: ./supabase/docker/docker-compose.yml
-      service: rest
+      file: ./docker-compose.platform.yml
+      service: frontend
 
-  realtime:
-    <<: *supabase-services
-    extends:
-      file: ./supabase/docker/docker-compose.yml
-      service: realtime
-
-  storage:
-    <<: *supabase-services
-    extends:
-      file: ./supabase/docker/docker-compose.yml
-      service: storage
-
-  imgproxy:
-    <<: *supabase-services
-    extends:
-      file: ./supabase/docker/docker-compose.yml
-      service: imgproxy
-
-  meta:
-    <<: *supabase-services
-    extends:
-      file: ./supabase/docker/docker-compose.yml
-      service: meta
-
-  functions:
-    <<: *supabase-services
-    extends:
-      file: ./supabase/docker/docker-compose.yml
-      service: functions
-
-  analytics:
-    <<: *supabase-services
-    extends:
-      file: ./supabase/docker/docker-compose.yml
-      service: analytics
-
+  # db waits on rabbitmq:service_healthy to gate startup ordering:
+  # concurrent container creation in E2B's Docker races RabbitMQ's
+  # .erlang.cookie write, producing `eacces` at broker boot. migrate and the
+  # backend services all depends_on db:service_healthy, so gating db alone
+  # cascades to the rest of the stack.
   db:
-    <<: *supabase-services
-    extends:
-      file: ./supabase/docker/docker-compose.yml
-      service: db
-  vector:
-    <<: *supabase-services
-    extends:
-      file: ./supabase/docker/docker-compose.yml
-      service: vector
+    <<: *agpt-services
+    # Pinned to pg15 to track the managed Postgres major that prod and dev
+    # run; testing on a newer major than production is skew we don't want.
+    image: pgvector/pgvector:pg15
+    restart: unless-stopped
+    ports:
+      - 5432:5432
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: your-super-secret-and-long-postgres-password
+      POSTGRES_DB: postgres
+    volumes:
+      # Creates the platform schema + the legacy auth.users shim that
+      # historical Prisma migrations reference. Only runs on a fresh volume.
+      - ./db/init/00-init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
+      - ./data/db/data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
 
   deps:
-    <<: *supabase-services
+    <<: *agpt-services
     profiles:
       - local
     image: busybox
     command: /bin/true
     depends_on:
-      - studio
-      - kong
-      - auth
-      - meta
-      - analytics
       - db
-      - vector
-      - redis
+      - redis-0
+      - redis-1
+      - redis-2
+      - redis-init
       - rabbitmq
+      - clamav
+      - falkordb
+      - migrate
+
+  deps_backend:
+    <<: *agpt-services
+    profiles:
+      - local
+    image: busybox
+    command: /bin/true
+    depends_on:
+      - deps
+      - rest_server
+      - executor
+      - copilot_executor
+      - websocket_server
+      - database_manager
+      - scheduler_server

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from enum import Enum
@@ -9,10 +10,37 @@ import pika.adapters.blocking_connection
 from pika.spec import BasicProperties
 from pydantic import BaseModel
 
-from backend.util.retry import conn_retry
+from backend.util.retry import conn_retry, func_retry
 from backend.util.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+# RabbitMQ Connection Constants
+# These constants solve specific connection stability issues observed in production
+
+# BLOCKED_CONNECTION_TIMEOUT (300s = 5 minutes)
+# Problem: Connection can hang indefinitely if RabbitMQ server is overloaded
+# Solution: Timeout and reconnect if connection is blocked for too long
+# Use case: Network issues or server resource constraints
+BLOCKED_CONNECTION_TIMEOUT = 300
+
+# SOCKET_TIMEOUT (30s)
+# Problem: Network operations can hang indefinitely on poor connections
+# Solution: Fail fast on socket operations to enable quick reconnection
+# Use case: Network latency, packet loss, or connectivity issues
+SOCKET_TIMEOUT = 30
+
+# CONNECTION_ATTEMPTS (5 attempts)
+# Problem: Temporary network issues cause permanent connection failures
+# Solution: More retry attempts for better resilience during long executions
+# Use case: Transient network issues during service startup or long-running operations
+CONNECTION_ATTEMPTS = 5
+
+# RETRY_DELAY (1 second)
+# Problem: Immediate reconnection attempts can overwhelm the server
+# Solution: Quick retry for faster recovery while still being respectful
+# Use case: Faster reconnection for long-running executions that need to resume quickly
+RETRY_DELAY = 1
 
 
 class ExchangeType(str, Enum):
@@ -109,8 +137,11 @@ class SyncRabbitMQ(RabbitMQBase):
             port=self.port,
             virtual_host=self.config.vhost,
             credentials=credentials,
-            heartbeat=600,
-            blocked_connection_timeout=300,
+            blocked_connection_timeout=BLOCKED_CONNECTION_TIMEOUT,
+            socket_timeout=SOCKET_TIMEOUT,
+            connection_attempts=CONNECTION_ATTEMPTS,
+            retry_delay=RETRY_DELAY,
+            heartbeat=300,  # 5 minute timeout (heartbeats sent every 2.5 min)
         )
 
         self._connection = pika.BlockingConnection(parameters)
@@ -161,6 +192,7 @@ class SyncRabbitMQ(RabbitMQBase):
                     routing_key=queue.routing_key or queue.name,
                 )
 
+    @func_retry
     def publish_message(
         self,
         routing_key: str,
@@ -194,6 +226,10 @@ class SyncRabbitMQ(RabbitMQBase):
 class AsyncRabbitMQ(RabbitMQBase):
     """Asynchronous RabbitMQ client"""
 
+    def __init__(self, config: RabbitMQConfig):
+        super().__init__(config)
+        self._reconnect_lock: asyncio.Lock | None = None
+
     @property
     def is_connected(self) -> bool:
         return bool(self._connection and not self._connection.is_closed)
@@ -204,7 +240,17 @@ class AsyncRabbitMQ(RabbitMQBase):
 
     @conn_retry("AsyncRabbitMQ", "Acquiring async connection")
     async def connect(self):
-        if self.is_connected:
+        if self.is_connected and self._channel and not self._channel.is_closed:
+            return
+
+        if (
+            self.is_connected
+            and self._connection
+            and (self._channel is None or self._channel.is_closed)
+        ):
+            self._channel = await self._connection.channel()
+            await self._channel.set_qos(prefetch_count=1)
+            await self.declare_infrastructure()
             return
 
         self._connection = await aio_pika.connect_robust(
@@ -213,6 +259,8 @@ class AsyncRabbitMQ(RabbitMQBase):
             login=self.username,
             password=self.password,
             virtualhost=self.config.vhost.lstrip("/"),
+            blocked_connection_timeout=BLOCKED_CONNECTION_TIMEOUT,
+            heartbeat=300,  # 5 minute timeout (heartbeats sent every 2.5 min)
         )
         self._channel = await self._connection.channel()
         await self._channel.set_qos(prefetch_count=1)
@@ -258,23 +306,46 @@ class AsyncRabbitMQ(RabbitMQBase):
                     exchange, routing_key=queue.routing_key or queue.name
                 )
 
-    async def publish_message(
+    @property
+    def _lock(self) -> asyncio.Lock:
+        if self._reconnect_lock is None:
+            self._reconnect_lock = asyncio.Lock()
+        return self._reconnect_lock
+
+    async def _ensure_channel(self) -> aio_pika.abc.AbstractChannel:
+        """Get a valid channel, reconnecting if the current one is stale.
+
+        Uses a lock to prevent concurrent reconnection attempts from racing.
+        """
+        if self.is_ready:
+            return self._channel  # type: ignore  # is_ready guarantees non-None
+
+        async with self._lock:
+            # Double-check after acquiring lock
+            if self.is_ready:
+                return self._channel  # type: ignore
+
+            self._channel = None
+            await self.connect()
+
+            if self._channel is None:
+                raise RuntimeError("Channel should be established after connect")
+
+            return self._channel
+
+    async def _publish_once(
         self,
         routing_key: str,
         message: str,
         exchange: Optional[Exchange] = None,
         persistent: bool = True,
     ) -> None:
-        if not self.is_ready:
-            await self.connect()
-
-        if self._channel is None:
-            raise RuntimeError("Channel should be established after connect")
+        channel = await self._ensure_channel()
 
         if exchange:
-            exchange_obj = await self._channel.get_exchange(exchange.name)
+            exchange_obj = await channel.get_exchange(exchange.name)
         else:
-            exchange_obj = self._channel.default_exchange
+            exchange_obj = channel.default_exchange
 
         await exchange_obj.publish(
             aio_pika.Message(
@@ -288,9 +359,23 @@ class AsyncRabbitMQ(RabbitMQBase):
             routing_key=routing_key,
         )
 
+    @func_retry
+    async def publish_message(
+        self,
+        routing_key: str,
+        message: str,
+        exchange: Optional[Exchange] = None,
+        persistent: bool = True,
+    ) -> None:
+        try:
+            await self._publish_once(routing_key, message, exchange, persistent)
+        except aio_pika.exceptions.ChannelInvalidStateError:
+            logger.warning(
+                "RabbitMQ channel invalid, forcing reconnect and retrying publish"
+            )
+            async with self._lock:
+                self._channel = None
+            await self._publish_once(routing_key, message, exchange, persistent)
+
     async def get_channel(self) -> aio_pika.abc.AbstractChannel:
-        if not self.is_ready:
-            await self.connect()
-        if self._channel is None:
-            raise RuntimeError("Channel should be established after connect")
-        return self._channel
+        return await self._ensure_channel()

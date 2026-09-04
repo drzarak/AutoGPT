@@ -1,13 +1,15 @@
 from pydantic import BaseModel
 
-from backend.data.block import (
+from backend.blocks._base import (
     Block,
     BlockCategory,
     BlockManualWebhookConfig,
     BlockOutput,
-    BlockSchema,
+    BlockSchemaInput,
+    BlockSchemaOutput,
 )
 from backend.data.model import SchemaField
+from backend.integrations.providers import ProviderName
 from backend.integrations.webhooks.compass import CompassWebhookType
 
 
@@ -26,10 +28,10 @@ class TranscriptionDataModel(BaseModel):
 
 
 class CompassAITriggerBlock(Block):
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         payload: TranscriptionDataModel = SchemaField(hidden=True)
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         transcription: str = SchemaField(
             description="The contents of the compass transcription."
         )
@@ -42,7 +44,7 @@ class CompassAITriggerBlock(Block):
             input_schema=CompassAITriggerBlock.Input,
             output_schema=CompassAITriggerBlock.Output,
             webhook_config=BlockManualWebhookConfig(
-                provider="compass",
+                provider=ProviderName.COMPASS,
                 webhook_type=CompassWebhookType.TRANSCRIPTION,
             ),
             test_input=[
@@ -55,5 +57,5 @@ class CompassAITriggerBlock(Block):
             # ],
         )
 
-    def run(self, input_data: Input, **kwargs) -> BlockOutput:
+    async def run(self, input_data: Input, **kwargs) -> BlockOutput:
         yield "transcription", input_data.payload.transcription

@@ -1,14 +1,21 @@
 import tweepy
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -17,7 +24,7 @@ class TwitterHideReplyBlock(Block):
     Hides a reply of one of your tweets
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["tweet.read", "tweet.moderate.write", "users.read", "offline.access"]
         )
@@ -27,9 +34,8 @@ class TwitterHideReplyBlock(Block):
             placeholder="Enter tweet ID",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the operation was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -38,6 +44,7 @@ class TwitterHideReplyBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterHideReplyBlock.Input,
             output_schema=TwitterHideReplyBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "tweet_id": "1234567890",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -66,7 +73,7 @@ class TwitterHideReplyBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -88,7 +95,7 @@ class TwitterUnhideReplyBlock(Block):
     Unhides a reply to a tweet
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TwitterCredentialsInput = TwitterCredentialsField(
             ["tweet.read", "tweet.moderate.write", "users.read", "offline.access"]
         )
@@ -98,9 +105,8 @@ class TwitterUnhideReplyBlock(Block):
             placeholder="Enter tweet ID",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the operation was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -109,6 +115,7 @@ class TwitterUnhideReplyBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterUnhideReplyBlock.Input,
             output_schema=TwitterUnhideReplyBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "tweet_id": "1234567890",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -137,7 +144,7 @@ class TwitterUnhideReplyBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

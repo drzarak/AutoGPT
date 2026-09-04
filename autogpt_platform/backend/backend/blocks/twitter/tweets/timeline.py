@@ -4,9 +4,11 @@ from typing import cast
 import tweepy
 from tweepy.client import Response
 
+from backend.blocks._base import Block, BlockCategory, BlockOutput, BlockSchemaOutput
 from backend.blocks.twitter._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TWITTER_OAUTH_IS_CONFIGURED,
     TwitterCredentials,
     TwitterCredentialsField,
     TwitterCredentialsInput,
@@ -30,7 +32,6 @@ from backend.blocks.twitter._types import (
     TweetUserFieldsFilter,
 )
 from backend.blocks.twitter.tweepy_exceptions import handle_tweepy_exception
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
@@ -59,7 +60,7 @@ class TwitterGetUserMentionsBlock(Block):
             description="Token for pagination", default="", advanced=True
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common Outputs that user commonly uses
         ids: list[str] = SchemaField(description="List of Tweet IDs")
         texts: list[str] = SchemaField(description="All Tweet texts")
@@ -82,7 +83,6 @@ class TwitterGetUserMentionsBlock(Block):
         )
 
         # error
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -91,6 +91,7 @@ class TwitterGetUserMentionsBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetUserMentionsBlock.Input,
             output_schema=TwitterGetUserMentionsBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "user_id": "12345",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -232,7 +233,7 @@ class TwitterGetUserMentionsBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -300,7 +301,7 @@ class TwitterGetHomeTimelineBlock(Block):
             description="Token for pagination", default="", advanced=True
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common Outputs that user commonly uses
         ids: list[str] = SchemaField(description="List of Tweet IDs")
         texts: list[str] = SchemaField(description="All Tweet texts")
@@ -323,7 +324,6 @@ class TwitterGetHomeTimelineBlock(Block):
         )
 
         # error
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -332,6 +332,7 @@ class TwitterGetHomeTimelineBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetHomeTimelineBlock.Input,
             output_schema=TwitterGetHomeTimelineBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "max_results": 2,
@@ -464,7 +465,7 @@ class TwitterGetHomeTimelineBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -536,7 +537,7 @@ class TwitterGetUserTweetsBlock(Block):
             description="Token for pagination", default="", advanced=True
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         # Common Outputs that user commonly uses
         ids: list[str] = SchemaField(description="List of Tweet IDs")
         texts: list[str] = SchemaField(description="All Tweet texts")
@@ -559,7 +560,6 @@ class TwitterGetUserTweetsBlock(Block):
         )
 
         # error
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -568,6 +568,7 @@ class TwitterGetUserTweetsBlock(Block):
             categories={BlockCategory.SOCIAL},
             input_schema=TwitterGetUserTweetsBlock.Input,
             output_schema=TwitterGetUserTweetsBlock.Output,
+            disabled=not TWITTER_OAUTH_IS_CONFIGURED,
             test_input={
                 "user_id": "12345",
                 "credentials": TEST_CREDENTIALS_INPUT,
@@ -709,7 +710,7 @@ class TwitterGetUserTweetsBlock(Block):
         except tweepy.TweepyException:
             raise
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,

@@ -3,7 +3,13 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.data.model import SchemaField
 
 from ._api import get_api
@@ -26,7 +32,7 @@ class StatusState(Enum):
 class GithubCreateStatusBlock(Block):
     """Block for creating a commit status on a GitHub repository."""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: GithubFineGrainedAPICredentialsInput = (
             GithubFineGrainedAPICredentialsField("repo:status")
         )
@@ -54,7 +60,7 @@ class GithubCreateStatusBlock(Block):
             advanced=False,
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         class StatusResult(BaseModel):
             id: int
             url: str
@@ -66,7 +72,6 @@ class GithubCreateStatusBlock(Block):
             updated_at: str
 
         status: StatusResult = SchemaField(description="Details of the created status")
-        error: str = SchemaField(description="Error message if status creation failed")
 
     def __init__(self):
         super().__init__(
@@ -115,7 +120,7 @@ class GithubCreateStatusBlock(Block):
         )
 
     @staticmethod
-    def create_status(
+    async def create_status(
         credentials: GithubFineGrainedAPICredentials,
         repo_url: str,
         sha: str,
@@ -144,7 +149,9 @@ class GithubCreateStatusBlock(Block):
             data.description = description
 
         status_url = f"{repo_url}/statuses/{sha}"
-        response = api.post(status_url, data=data.model_dump_json(exclude_none=True))
+        response = await api.post(
+            status_url, data=data.model_dump_json(exclude_none=True)
+        )
         result = response.json()
 
         return {
@@ -158,7 +165,7 @@ class GithubCreateStatusBlock(Block):
             "updated_at": result["updated_at"],
         }
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -166,7 +173,7 @@ class GithubCreateStatusBlock(Block):
         **kwargs,
     ) -> BlockOutput:
         try:
-            result = self.create_status(
+            result = await self.create_status(
                 credentials=credentials,
                 repo_url=input_data.repo_url,
                 sha=input_data.sha,

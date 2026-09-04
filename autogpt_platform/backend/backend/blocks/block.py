@@ -2,7 +2,13 @@ import os
 import re
 from typing import Type
 
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.data.model import SchemaField
 
 
@@ -15,12 +21,12 @@ class BlockInstallationBlock(Block):
         for development purposes only.
     """
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         code: str = SchemaField(
             description="Python code of the block to be installed",
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: str = SchemaField(
             description="Success message if the block is installed successfully",
         )
@@ -38,7 +44,7 @@ class BlockInstallationBlock(Block):
             disabled=True,
         )
 
-    def run(self, input_data: Input, **kwargs) -> BlockOutput:
+    async def run(self, input_data: Input, **kwargs) -> BlockOutput:
         code = input_data.code
 
         if search := re.search(r"class (\w+)\(Block\):", code):
@@ -64,7 +70,7 @@ class BlockInstallationBlock(Block):
 
             from backend.util.test import execute_block_test
 
-            execute_block_test(block)
+            await execute_block_test(block)
             yield "success", "Block installed successfully."
         except Exception as e:
             os.remove(file_path)

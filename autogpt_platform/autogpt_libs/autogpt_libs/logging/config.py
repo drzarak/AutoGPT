@@ -1,14 +1,26 @@
 """Logging module for Auto-GPT."""
 
 import logging
+import os
+import socket
 import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .filters import BelowLevelFilter
-from .formatters import AGPTFormatter, StructuredLoggingFormatter
+from .formatters import AGPTFormatter
+
+# Configure global socket timeout and gRPC keepalive to prevent deadlocks
+# This must be done at import time before any gRPC connections are established
+socket.setdefaulttimeout(30)  # 30-second socket timeout
+
+# Enable gRPC keepalive to detect dead connections faster
+os.environ.setdefault("GRPC_KEEPALIVE_TIME_MS", "30000")  # 30 seconds
+os.environ.setdefault("GRPC_KEEPALIVE_TIMEOUT_MS", "5000")  # 5 seconds
+os.environ.setdefault("GRPC_KEEPALIVE_PERMIT_WITHOUT_CALLS", "true")
 
 LOG_DIR = Path(__file__).parent.parent.parent.parent / "logs"
 LOG_FILE = "activity.log"
@@ -79,29 +91,13 @@ def configure_logging(force_cloud_logging: bool = False) -> None:
     Note: This function is typically called at the start of the application
     to set up the logging infrastructure.
     """
-
     config = LoggingConfig()
-
     log_handlers: list[logging.Handler] = []
 
-    # Cloud logging setup
-    if config.enable_cloud_logging or force_cloud_logging:
-        import google.cloud.logging
-        from google.cloud.logging.handlers import CloudLoggingHandler
-        from google.cloud.logging_v2.handlers.transports.sync import SyncTransport
+    structured_logging = config.enable_cloud_logging or force_cloud_logging
 
-        client = google.cloud.logging.Client()
-        cloud_handler = CloudLoggingHandler(
-            client,
-            name="autogpt_logs",
-            transport=SyncTransport,
-        )
-        cloud_handler.setLevel(config.level)
-        cloud_handler.setFormatter(StructuredLoggingFormatter())
-        log_handlers.append(cloud_handler)
-        print("Cloud logging enabled")
-    else:
-        # Console output handlers
+    # Console output handlers
+    if not structured_logging:
         stdout = logging.StreamHandler(stream=sys.stdout)
         stdout.setLevel(config.level)
         stdout.addFilter(BelowLevelFilter(logging.WARNING))
@@ -118,7 +114,16 @@ def configure_logging(force_cloud_logging: bool = False) -> None:
             stderr.setFormatter(AGPTFormatter(SIMPLE_LOG_FORMAT))
 
         log_handlers += [stdout, stderr]
-        print("Console logging enabled")
+
+    # Cloud logging setup
+    else:
+        # Use Google Cloud Structured Log Handler. Log entries are printed to stdout
+        # in a JSON format which is automatically picked up by Google Cloud Logging.
+        from google.cloud.logging.handlers import StructuredLogHandler
+
+        structured_log_handler = StructuredLogHandler(stream=sys.stdout)
+        structured_log_handler.setLevel(config.level)
+        log_handlers.append(structured_log_handler)
 
     # File logging setup
     if config.enable_file_logging:
@@ -129,8 +134,13 @@ def configure_logging(force_cloud_logging: bool = False) -> None:
         print(f"Log directory: {config.log_dir}")
 
         # Activity log handler (INFO and above)
-        activity_log_handler = logging.FileHandler(
-            config.log_dir / LOG_FILE, "a", "utf-8"
+        # Security fix: Use RotatingFileHandler with size limits to prevent disk exhaustion
+        activity_log_handler = RotatingFileHandler(
+            config.log_dir / LOG_FILE,
+            mode="a",
+            encoding="utf-8",
+            maxBytes=10 * 1024 * 1024,  # 10MB per file
+            backupCount=3,  # Keep 3 backup files (40MB total)
         )
         activity_log_handler.setLevel(config.level)
         activity_log_handler.setFormatter(
@@ -140,8 +150,13 @@ def configure_logging(force_cloud_logging: bool = False) -> None:
 
         if config.level == logging.DEBUG:
             # Debug log handler (all levels)
-            debug_log_handler = logging.FileHandler(
-                config.log_dir / DEBUG_LOG_FILE, "a", "utf-8"
+            # Security fix: Use RotatingFileHandler with size limits
+            debug_log_handler = RotatingFileHandler(
+                config.log_dir / DEBUG_LOG_FILE,
+                mode="a",
+                encoding="utf-8",
+                maxBytes=10 * 1024 * 1024,  # 10MB per file
+                backupCount=3,  # Keep 3 backup files (40MB total)
             )
             debug_log_handler.setLevel(logging.DEBUG)
             debug_log_handler.setFormatter(
@@ -150,17 +165,27 @@ def configure_logging(force_cloud_logging: bool = False) -> None:
             log_handlers.append(debug_log_handler)
 
         # Error log handler (ERROR and above)
-        error_log_handler = logging.FileHandler(
-            config.log_dir / ERROR_LOG_FILE, "a", "utf-8"
+        # Security fix: Use RotatingFileHandler with size limits
+        error_log_handler = RotatingFileHandler(
+            config.log_dir / ERROR_LOG_FILE,
+            mode="a",
+            encoding="utf-8",
+            maxBytes=10 * 1024 * 1024,  # 10MB per file
+            backupCount=3,  # Keep 3 backup files (40MB total)
         )
         error_log_handler.setLevel(logging.ERROR)
         error_log_handler.setFormatter(AGPTFormatter(DEBUG_LOG_FORMAT, no_color=True))
         log_handlers.append(error_log_handler)
-        print("File logging enabled")
 
     # Configure the root logger
     logging.basicConfig(
-        format=DEBUG_LOG_FORMAT if config.level == logging.DEBUG else SIMPLE_LOG_FORMAT,
+        format=(
+            "%(levelname)s  %(message)s"
+            if structured_logging
+            else (
+                DEBUG_LOG_FORMAT if config.level == logging.DEBUG else SIMPLE_LOG_FORMAT
+            )
+        ),
         level=config.level,
         handlers=log_handlers,
     )

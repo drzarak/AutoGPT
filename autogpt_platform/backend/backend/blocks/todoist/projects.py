@@ -1,32 +1,38 @@
 from todoist_api_python.api import TodoistAPI
 from typing_extensions import Optional
 
+from backend.blocks._base import (
+    Block,
+    BlockCategory,
+    BlockOutput,
+    BlockSchemaInput,
+    BlockSchemaOutput,
+)
 from backend.blocks.todoist._auth import (
     TEST_CREDENTIALS,
     TEST_CREDENTIALS_INPUT,
+    TODOIST_OAUTH_IS_CONFIGURED,
     TodoistCredentials,
     TodoistCredentialsField,
     TodoistCredentialsInput,
 )
 from backend.blocks.todoist._types import Colors
-from backend.data.block import Block, BlockCategory, BlockOutput, BlockSchema
 from backend.data.model import SchemaField
 
 
 class TodoistListProjectsBlock(Block):
     """Gets all projects for a Todoist user"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         names_list: list[str] = SchemaField(description="List of project names")
         ids_list: list[str] = SchemaField(description="List of project IDs")
         url_list: list[str] = SchemaField(description="List of project URLs")
         complete_data: list[dict] = SchemaField(
             description="Complete project data including all fields"
         )
-        error: str = SchemaField(description="Error message if request failed")
 
     def __init__(self):
         super().__init__(
@@ -35,6 +41,7 @@ class TodoistListProjectsBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistListProjectsBlock.Input,
             output_schema=TodoistListProjectsBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
             },
@@ -93,7 +100,7 @@ class TodoistListProjectsBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -119,7 +126,7 @@ class TodoistListProjectsBlock(Block):
 class TodoistCreateProjectBlock(Block):
     """Creates a new project in Todoist"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         name: str = SchemaField(description="Name of the project", advanced=False)
         parent_id: Optional[str] = SchemaField(
@@ -139,9 +146,8 @@ class TodoistCreateProjectBlock(Block):
             description="Display style (list or board)", default=None, advanced=True
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the creation was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -150,6 +156,7 @@ class TodoistCreateProjectBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistCreateProjectBlock.Input,
             output_schema=TodoistCreateProjectBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={"credentials": TEST_CREDENTIALS_INPUT, "name": "Test Project"},
             test_credentials=TEST_CREDENTIALS,
             test_output=[("success", True)],
@@ -182,7 +189,7 @@ class TodoistCreateProjectBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -208,20 +215,19 @@ class TodoistCreateProjectBlock(Block):
 class TodoistGetProjectBlock(Block):
     """Gets details for a specific Todoist project"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         project_id: str = SchemaField(
             description="ID of the project to get details for", advanced=False
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         project_id: str = SchemaField(description="ID of project")
         project_name: str = SchemaField(description="Name of project")
         project_url: str = SchemaField(description="URL of project")
         complete_data: dict = SchemaField(
             description="Complete project data including all fields"
         )
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -230,6 +236,7 @@ class TodoistGetProjectBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistGetProjectBlock.Input,
             output_schema=TodoistGetProjectBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "project_id": "2203306141",
@@ -273,7 +280,7 @@ class TodoistGetProjectBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -301,7 +308,7 @@ class TodoistGetProjectBlock(Block):
 class TodoistUpdateProjectBlock(Block):
     """Updates an existing project in Todoist"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         project_id: str = SchemaField(
             description="ID of project to update", advanced=False
@@ -321,9 +328,8 @@ class TodoistUpdateProjectBlock(Block):
             description="Display style (list or board)", default=None, advanced=True
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the update was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -332,6 +338,7 @@ class TodoistUpdateProjectBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistUpdateProjectBlock.Input,
             output_schema=TodoistUpdateProjectBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "project_id": "2203306141",
@@ -370,7 +377,7 @@ class TodoistUpdateProjectBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -396,15 +403,14 @@ class TodoistUpdateProjectBlock(Block):
 class TodoistDeleteProjectBlock(Block):
     """Deletes a project and all of its sections and tasks"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         project_id: str = SchemaField(
             description="ID of project to delete", advanced=False
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         success: bool = SchemaField(description="Whether the deletion was successful")
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -413,6 +419,7 @@ class TodoistDeleteProjectBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistDeleteProjectBlock.Input,
             output_schema=TodoistDeleteProjectBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "project_id": "2203306141",
@@ -432,7 +439,7 @@ class TodoistDeleteProjectBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
@@ -453,13 +460,13 @@ class TodoistDeleteProjectBlock(Block):
 class TodoistListCollaboratorsBlock(Block):
     """Gets all collaborators for a Todoist project"""
 
-    class Input(BlockSchema):
+    class Input(BlockSchemaInput):
         credentials: TodoistCredentialsInput = TodoistCredentialsField([])
         project_id: str = SchemaField(
             description="ID of the project to get collaborators for", advanced=False
         )
 
-    class Output(BlockSchema):
+    class Output(BlockSchemaOutput):
         collaborator_ids: list[str] = SchemaField(
             description="List of collaborator IDs"
         )
@@ -472,7 +479,6 @@ class TodoistListCollaboratorsBlock(Block):
         complete_data: list[dict] = SchemaField(
             description="Complete collaborator data including all fields"
         )
-        error: str = SchemaField(description="Error message if the request failed")
 
     def __init__(self):
         super().__init__(
@@ -481,6 +487,7 @@ class TodoistListCollaboratorsBlock(Block):
             categories={BlockCategory.PRODUCTIVITY},
             input_schema=TodoistListCollaboratorsBlock.Input,
             output_schema=TodoistListCollaboratorsBlock.Output,
+            disabled=not TODOIST_OAUTH_IS_CONFIGURED,
             test_input={
                 "credentials": TEST_CREDENTIALS_INPUT,
                 "project_id": "2203306141",
@@ -541,7 +548,7 @@ class TodoistListCollaboratorsBlock(Block):
         except Exception as e:
             raise e
 
-    def run(
+    async def run(
         self,
         input_data: Input,
         *,
